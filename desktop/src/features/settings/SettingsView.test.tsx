@@ -64,6 +64,14 @@ describe('automatic settings persistence',()=>{
  });
 });
 describe('native exclusion chooser',()=>{
+ it('keeps folder names and full paths together in one global settings category',async()=>{
+  mount();fireEvent.click(screen.getByRole('button',{name:en.index}));
+  expect(screen.queryByLabelText(en.exclusions)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button',{name:en.exclusions}));
+  expect(screen.getAllByRole('textbox',{name:en.exclusions})).toHaveLength(1);
+  fireEvent.change(screen.getByRole('textbox',{name:en.exclusions}),{target:{value:'node_modules\nC:\\Private'}});await tick();
+  expect(updates()[0][1]).toMatchObject({settings:{exclusions:['node_modules','C:\\Private']}});
+ });
  it('preserves line editing and appends full folder/file paths from native dialogs',async()=>{
   const changed=vi.fn();render(<ExclusionEditor value={['node_modules']} onChange={changed} t={t} onError={vi.fn()}/>);
   fireEvent.change(screen.getByLabelText(en.exclusions),{target:{value:'node_modules\n'}});

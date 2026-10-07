@@ -18,9 +18,12 @@ also terminates its worker tree. The install hook clears the managed
 obsolete DLLs. Never store personal files inside the managed resources directory.
 
 Upgrades preserve `data`, `cache`, `location.json`, custom roots and settings.
-The SQLite migration adds indexes/queue priority and merges new default
-exclusions once. It preserves custom exclusions and later user removals. A
-normal launch restores Explorer/autostart integration from saved settings.
+The SQLite migration adds indexed queue summaries and covering status indices,
+and merges new default exclusions once. It preserves custom exclusions and later user removals. A
+0.1.2 moves legacy per-location exclusions into the global settings list, anchoring
+relative rules to their original location. That avoids broadening a formerly
+local rule to unrelated locations. All exclusions are edited in Settings >
+Exclusions; location menus contain no exclusion editor. A normal launch restores Explorer/autostart integration from saved settings.
 Uninstall also keeps index data unless the user explicitly removes it separately.
 
 ## Release validation
@@ -34,8 +37,8 @@ routing and window-state persistence, and leave the personal installation runnin
 This tests the installer recipe/payload; it does not execute the canonical
 installer against the user's personal uninstall registration.
 
-When `artifacts/upgrade-baseline/qa/nsis-output.exe` is available, the test first
-installs the isolated 0.1.0 payload and copies a previously validated private
+When `artifacts/upgrade-baseline-0.1.1/qa/nsis-output.exe` is available, the test first
+installs the isolated 0.1.1 payload (with the older 0.1.0 baseline as a fallback) and copies a previously validated private
 0.1.0 index into it. It checks an orphaned old worker, an upgrade without `/D`,
 running-app reinstallation with a conflicting `/D`, stale runtime removal,
 silent downgrade rejection, custom settings/root exclusions, existing file IDs
@@ -46,3 +49,12 @@ Reports are written under `artifacts/release`; QA uses no production shortcuts.
 
 Full clean-machine, signing and interactive installer/UI acceptance remain
 separate from this local automated validation.
+
+The optional `-WhileBundling` validation runs against the newly generated NSIS
+recipe while canonical LZMA compression finishes. `installed-verification.json`
+records its version and executable hash. `verify-installed-payload.py` compares
+every installed resource, root runtime DLL and executable with the release inputs.
+Final verification imports installed-test results only when the executable and
+all recorded resource hashes still match. This does not install over the personal
+product identity. Generated Office fixture and native-manifest changes already
+present in a developer checkout can be preserved separately from a code commit.

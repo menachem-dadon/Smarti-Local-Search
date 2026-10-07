@@ -25,10 +25,12 @@ fn large_metadata_queue_finishes_without_per_file_sleep_and_applies_path_exclusi
         .unwrap();
     drop(store);
     let engine = Engine::open(data, resources, Arc::new(|_, _| {})).unwrap();
-    let id = engine.add_root(&root).unwrap();
-    engine
-        .update_root(id, vec![hidden.to_string_lossy().into_owned()])
-        .unwrap();
+    engine.add_root(&root).unwrap();
+    let mut settings = engine.settings().unwrap();
+    settings
+        .exclusions
+        .push(hidden.to_string_lossy().into_owned());
+    engine.update_settings(settings.clone(), false).unwrap();
     std::thread::sleep(Duration::from_millis(350));
     assert_eq!(
         engine.status().unwrap().files,
@@ -66,7 +68,10 @@ fn large_metadata_queue_finishes_without_per_file_sleep_and_applies_path_exclusi
             .unwrap(),
         "1"
     );
-    engine.update_root(id, vec![]).unwrap();
+    settings
+        .exclusions
+        .retain(|rule| rule != &hidden.to_string_lossy());
+    engine.update_settings(settings.clone(), false).unwrap();
     engine.start_index(None).unwrap();
     loop {
         let status = engine.status().unwrap();
@@ -77,9 +82,10 @@ fn large_metadata_queue_finishes_without_per_file_sleep_and_applies_path_exclusi
         std::thread::sleep(Duration::from_millis(25));
     }
     engine.control("stop").unwrap();
-    engine
-        .update_root(id, vec![hidden.to_string_lossy().into_owned()])
-        .unwrap();
+    settings
+        .exclusions
+        .push(hidden.to_string_lossy().into_owned());
+    engine.update_settings(settings, false).unwrap();
     engine.start_index(None).unwrap();
     let prune_started = Instant::now();
     loop {

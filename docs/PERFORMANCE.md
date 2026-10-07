@@ -10,23 +10,34 @@ Metadata appears first, FTS runs immediately, and semantic requests wait 125ms t
 
 Discovery skips known dependency/cache folders and the app's own resources/data. Content hashes stream through a 64KB buffer. File jobs are persistent. Media decodes per segment, with bounded resolution and CPU decode threads. Battery/saver policy defers heavy media jobs while allowing text/code and search. Inference/decoding processes use below-normal Windows priority.
 
-Discovery first counts included files using the same pruned directory walk, then
-records metadata. This gives a known denominator without retaining every path in
-memory. The first counting pass displays "Estimating". Discovery ETA uses active
-elapsed time and processed files; indexing ETA uses measured completion times by
-file type. Unseen types temporarily use the observed average and the UI explicitly
-labels that estimate as provisional. Pause time is excluded; stopped/paused work
-does not display a running countdown. Media duration and unusually large files
-can still change the estimate substantially.
+Discovery walks each selected location once; it no longer performs a separate
+counting walk. Existing indexed file counts provide a provisional discovery ETA.
+A brand-new location displays "Estimating" while its total is unknown. The final
+total is corrected to the number actually discovered. Discovery timing excludes
+pause time; indexing ETA uses completion times by file type. Unseen types use the
+observed average with a provisional label. Media duration and large files can
+change the estimate substantially.
 
-Identity lookups use `(root_id, stable_id)`; known paths avoid unnecessary native
-identity handles and rename/FTS updates. Metadata and queue changes commit in one
-transaction per file. A persisted job priority and `(state, priority, file_id)`
-index avoid sorting the remaining queue before every job. The 250 ms poll delay
-applies only while idle or suspended. Five-minute reconciliation runs when the
-eligible queue is idle, resets its clock after scans, and skips unchanged NTFS
-journals. Explicit rescans and exclusion changes still queue discovery. A stopped
-index remains stopped across restarts.
+Root scan requests use a set and coalesce both queued and active requests. Normal
+watcher events never queue a recursive root scan: file metadata is reconciled
+individually, directory metadata checks direct children, and a directory creation
+or move walks only that subtree. Native events debounce for 500 ms; excluded and
+owned paths are filtered before buffering. The buffer is bounded to 8,192 paths,
+and batches are bounded to 256 paths. An overflow schedules one metadata recovery
+pass while the file queue is idle. Healthy watchers do not trigger periodic root
+rescans. Offline locations and degraded watchers are checked again every five
+minutes while idle. Startup still reconciles changes made while the app was shut
+down; unchanged metadata/content does not generate new embeddings.
+
+Identity lookups use `(root_id, stable_id)`; unchanged known paths update only
+their reconciliation generation. A persisted job priority and covering
+`(online, state, priority, file_id)` index select eligible work without sorting or
+joining large file rows. Queue kind/online summaries are maintained by triggers.
+Partial/covering indices serve status counts and location counts without reading
+content or vector BLOBs. SQLite's page cache is bounded to 32 MiB. The 250 ms delay
+applies only while idle or suspended. Interrupted active jobs return to queued
+state; interrupted subtree walks are retained for resume. Extraction checks file
+metadata again before committing and retries a file edited during processing.
 
 Exclusions accept folder components, relative patterns, full local paths and UNC
 paths. Absolute paths use case-insensitive component boundaries; local short path

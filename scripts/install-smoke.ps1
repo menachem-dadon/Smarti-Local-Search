@@ -1,10 +1,11 @@
-param([string]$Installer,[switch]$KeepInstalled,[string]$TestName='release-upgrade')
+param([string]$Installer,[switch]$KeepInstalled,[string]$TestName='release-upgrade',[switch]$WhileBundling)
 $ErrorActionPreference='Stop'
 $taskRoot=(Resolve-Path -LiteralPath (Split-Path $PSScriptRoot -Parent)).Path
 Set-Location -LiteralPath $taskRoot
 $config=Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
 if(!$Installer){$Installer=Join-Path $taskRoot ("artifacts/release/$($config.productName)_$($config.version)_x64-setup.exe")}
-if(!(Test-Path -LiteralPath $Installer)){throw 'Canonical release installer missing'}
+if(!$WhileBundling -and !(Test-Path -LiteralPath $Installer)){throw 'Canonical release installer missing'}
+if($WhileBundling -and (Select-String -LiteralPath target/release/nsis/x64/installer.nsi -Pattern ('^!define VERSION "'+[regex]::Escape($config.version)+'"$')).Count -ne 1){throw 'The current release NSIS recipe is not ready'}
 if($TestName -notmatch '^[a-z0-9-]+$'){throw 'Invalid test name'}
 $testBase=Join-Path $taskRoot ('artifacts/installed-qa-'+$TestName+'-'+(Get-Date -Format 'yyyyMMdd-HHmmss'))
 $installPath=Join-Path $testBase 'application'
@@ -12,7 +13,8 @@ $qaProduct='Smarti Local Search QA '+$TestName
 $registryPath='HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\'+$qaProduct
 if(Test-Path -LiteralPath $registryPath){throw 'Previous QA installation exists; inspect it before retrying'}
 New-Item -ItemType Directory -Path $testBase -Force | Out-Null
-$personalProcessIds=@(Get-CimInstance Win32_Process -Filter "Name='smarti-local-search.exe' OR Name='smarti-local-search-inference.exe'" | Select-Object -ExpandProperty ProcessId)
+$personalBase=Join-Path $env:LOCALAPPDATA 'Smarti Local Search'
+$personalProcessIds=@(Get-CimInstance Win32_Process -Filter "Name='smarti-local-search.exe' OR Name='smarti-local-search-inference.exe'" | Where-Object {$_.ExecutablePath -and $_.ExecutablePath.StartsWith($personalBase+'\',[StringComparison]::OrdinalIgnoreCase)} | Select-Object -ExpandProperty ProcessId)
 $personalRegistration=Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Smarti Local Search' -ErrorAction SilentlyContinue | ConvertTo-Json
 $personalExe=Join-Path $env:LOCALAPPDATA 'Smarti Local Search/smarti-local-search.exe'
 $personalHash=if(Test-Path -LiteralPath $personalExe){(Get-FileHash -LiteralPath $personalExe).Hash}else{$null}
@@ -33,7 +35,8 @@ function Wait-Report([string]$Path,[System.Diagnostics.Process]$Process){
     return $result
 }
 $python=Join-Path $taskRoot '.venv/Scripts/python.exe'
-$baseline=Join-Path $taskRoot 'artifacts/upgrade-baseline/qa/nsis-output.exe'
+$baseline=Join-Path $taskRoot 'artifacts/upgrade-baseline-0.1.1/qa/nsis-output.exe'
+if(!(Test-Path -LiteralPath $baseline)){$baseline=Join-Path $taskRoot 'artifacts/upgrade-baseline/qa/nsis-output.exe'}
 $legacy=Test-Path -LiteralPath $baseline
 if($legacy -and $TestName -ne 'release-upgrade'){throw 'Baseline installer has a fixed release-upgrade QA identity'}
 if($legacy){
@@ -70,7 +73,7 @@ if($legacy){
     if(!(Test-Path -LiteralPath $kept) -or (Get-Content -LiteralPath $location -Raw).Trim() -ne '{"path":"QA-relocated-index-pointer"}'){throw 'Upgrade removed user files or the index location pointer'}
 }
 $app=Join-Path $installPath 'smarti-local-search.exe'
-if((Get-FileHash -LiteralPath $app).Hash -ne (Get-FileHash artifacts/release/smarti-local-search.exe).Hash){throw 'Installed QA app differs from the canonical release'}
+if((Get-FileHash -LiteralPath $app).Hash -ne (Get-FileHash target/release/smarti-local-search.exe).Hash){throw 'Installed QA app differs from the release payload'}
 $registered=Get-ItemProperty -LiteralPath $registryPath
 if($registered.DisplayVersion -ne $config.version){throw 'Upgrade registration has the wrong version'}
 $previousData=$env:SMARTI_SEARCH_DATA_DIR
@@ -108,6 +111,8 @@ try {
     $resources=Join-Path $installPath 'resources'
     & $python tests/inference_smoke.py --host (Join-Path $resources 'inference/smarti-local-search-inference.exe') --resources $resources --cache (Join-Path $testBase 'inference-fallback') --accelerator npu
     if($LASTEXITCODE){throw 'Installed inference/fallback validation failed'}
+    & $python scripts/verify-installed-payload.py capture $installPath artifacts/release/installed-payload.json
+    if($LASTEXITCODE){throw 'Installed resource payload verification failed'}
     if(!$KeepInstalled){
         Install (Join-Path $installPath 'uninstall.exe') '/S'
         $deadline=[DateTime]::UtcNow.AddSeconds(30)
@@ -119,12 +124,13 @@ try {
     $after=Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Smarti Local Search' -ErrorAction SilentlyContinue | ConvertTo-Json
     if($after -ne $personalRegistration){throw 'QA modified the personal uninstall registration'}
     foreach($personalId in $personalProcessIds){if(!(Get-Process -Id $personalId -ErrorAction SilentlyContinue)){throw 'QA stopped an existing personal process'}}
-    $verification=Get-Content artifacts/release/verification.json -Raw | ConvertFrom-Json
-    $verification.installed_smoke_test=$true
+    $verification=[pscustomobject]@{version=$config.version;exe_sha256=(Get-FileHash target/release/smarti-local-search.exe).Hash}
+    $verification | Add-Member -NotePropertyName installed_smoke_test -NotePropertyValue $true
     foreach($entry in @{uninstall_smoke_test=(!$KeepInstalled);legacy_upgrade_test=$legacy;running_app_upgrade_test=$true;duplicate_install_prevented=$true;stale_runtime_removed=$true;silent_downgrade_blocked=$true;personal_install_preserved=$true;installer_test_identity=$qaProduct;installer_test_recipe='Generated release NSIS recipe repacked with QA product/registry identity; identical release executable and resources'}.GetEnumerator()){
         $verification | Add-Member -NotePropertyName $entry.Key -NotePropertyValue $entry.Value -Force
     }
-    $verification | ConvertTo-Json | Set-Content artifacts/release/verification.json -Encoding utf8
+    $verification | ConvertTo-Json | Set-Content artifacts/release/installed-verification.json -Encoding utf8
+    if(!$WhileBundling){& $PSScriptRoot/verify-release.ps1}
     Copy-Item -LiteralPath $report -Destination artifacts/release/native-smoke.json -Force
     Copy-Item -LiteralPath (Join-Path $testBase 'inference-fallback/health.json') -Destination artifacts/release/inference-fallback.json -Force
     Write-Output 'Native release, legacy/running upgrades, data preservation, downgrade guard and uninstall PASS'

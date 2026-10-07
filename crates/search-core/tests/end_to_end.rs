@@ -109,18 +109,64 @@ fn real_corpus_incremental_restart() {
             .is_empty()
     );
     let old_id = exact.results[0].file.id;
+    let original_chunks: Vec<(i64, i64)> = e
+        .store
+        .lock()
+        .unwrap()
+        .db
+        .prepare("SELECT file_id,id FROM chunks ORDER BY id")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
     std::fs::rename(corpus.join("auth.rs"), corpus.join("renamed.rs")).unwrap();
-    e.start_index(None).unwrap();
+    wait(&e, |_| {
+        e.store
+            .lock()
+            .unwrap()
+            .db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM files WHERE name='renamed.rs')",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap()
+    });
     wait(&e, |s| !s.running && s.pending == 0);
     thread::sleep(Duration::from_secs(1));
     let renamed = e.search(request(7, "renamed.rs", "exact", None)).unwrap();
     assert_eq!(renamed.results[0].file.id, old_id);
+    assert_eq!(
+        original_chunks,
+        e.store
+            .lock()
+            .unwrap()
+            .db
+            .prepare("SELECT file_id,id FROM chunks ORDER BY id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<(i64, i64)>>>()
+            .unwrap()
+    );
     std::fs::write(
         corpus.join("ocean.txt"),
         "Changed document about a mountain observatory.",
     )
     .unwrap();
-    e.start_index(None).unwrap();
+    wait(&e, |_| {
+        e.store
+            .lock()
+            .unwrap()
+            .db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM chunks WHERE text LIKE '%mountain observatory%')",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap()
+    });
     wait(&e, |s| s.pending == 0 && !s.running);
     thread::sleep(Duration::from_secs(1));
     assert!(
@@ -129,6 +175,88 @@ fn real_corpus_incremental_restart() {
             .results
             .is_empty()
     );
+    let ocean_id: i64 = e
+        .store
+        .lock()
+        .unwrap()
+        .db
+        .query_row("SELECT id FROM files WHERE name='ocean.txt'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let after_chunks: Vec<(i64, i64)> = e
+        .store
+        .lock()
+        .unwrap()
+        .db
+        .prepare("SELECT file_id,id FROM chunks ORDER BY id")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        original_chunks
+            .into_iter()
+            .filter(|(file, _)| *file != ocean_id)
+            .collect::<Vec<_>>(),
+        after_chunks
+            .iter()
+            .copied()
+            .filter(|(file, _)| *file != ocean_id)
+            .collect::<Vec<_>>(),
+        "editing one file must preserve every other content chunk/vector"
+    );
+    let scans: i64 = e
+        .store
+        .lock()
+        .unwrap()
+        .db
+        .query_row(
+            "SELECT count(*) FROM activity WHERE kind='scan'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(scans, 1, "file edit/rename must not schedule a root scan");
+    e.start_index(None).unwrap();
+    wait(&e, |s| !s.running && s.pending == 0);
+    let rescanned: Vec<(i64, i64)> = e
+        .store
+        .lock()
+        .unwrap()
+        .db
+        .prepare("SELECT file_id,id FROM chunks ORDER BY id")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        after_chunks, rescanned,
+        "explicit metadata reconciliation must not re-index unchanged content"
+    );
+    std::fs::rename(corpus.join("renamed.rs"), corpus.join("renamed.bin")).unwrap();
+    wait(&e, |_| {
+        e.store.lock().unwrap().db.query_row("SELECT EXISTS(SELECT 1 FROM files WHERE id=?1 AND kind='binary' AND state='metadata_only' AND semantic=0)",[old_id],|row| row.get::<_,bool>(0)).unwrap()
+    });
+    assert!(
+        e.store.lock().unwrap().chunks(old_id).unwrap().is_empty(),
+        "changed file type must discard stale content"
+    );
+    std::fs::rename(corpus.join("renamed.bin"), corpus.join("renamed.rs")).unwrap();
+    wait(&e, |_| {
+        e.store
+            .lock()
+            .unwrap()
+            .db
+            .query_row(
+                "SELECT semantic=1 FROM files WHERE id=?1",
+                [old_id],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap()
+    });
     e.control("pause").unwrap();
     assert!(e.status().unwrap().paused);
     e.control("resume").unwrap();

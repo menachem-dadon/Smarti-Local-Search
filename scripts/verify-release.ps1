@@ -16,5 +16,14 @@ $checksums | Set-Content -LiteralPath 'artifacts/release/SHA256SUMS.txt' -Encodi
 Copy-Item -LiteralPath $exe,$installer.FullName -Destination 'artifacts/release' -Force
 $commit=git rev-parse HEAD
 $report=@{version=$config.version;commit=$commit;model_bytes=(Get-Item 'resources/models/embeddinggemma-2-740m.litertlm').Length;installer_bytes=$installer.Length;exe=$exe;installer=$installer.FullName;verified_resources=$true;installed_smoke_test=$false}
+$installedReport='artifacts/release/installed-verification.json'
+if(Test-Path -LiteralPath $installedReport){
+    $installed=Get-Content -LiteralPath $installedReport -Raw | ConvertFrom-Json
+    if($installed.version -eq $config.version -and $installed.exe_sha256 -eq (Get-FileHash -LiteralPath $exe).Hash){
+        & ./.venv/Scripts/python.exe scripts/verify-installed-payload.py check artifacts/release/installed-payload.json
+        if($LASTEXITCODE){throw 'Release differs from installed QA payload'}
+        foreach($field in $installed.PSObject.Properties){$report[$field.Name]=$field.Value}
+    }
+}
 $report | ConvertTo-Json | Set-Content -LiteralPath 'artifacts/release/verification.json' -Encoding utf8
 Write-Output $report

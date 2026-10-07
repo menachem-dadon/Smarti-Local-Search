@@ -1,1 +1,1 @@
-{"name":"smarti-local-search-workspace","private":true,"version":"0.1.1","scripts":{"dev":"npm --prefix desktop run tauri -- dev","build":"npm --prefix desktop run build","test":"npm --prefix desktop test"}}
+{"name":"smarti-local-search-workspace","private":true,"version":"0.1.2","scripts":{"dev":"npm --prefix desktop run tauri -- dev","build":"npm --prefix desktop run build","test":"npm --prefix desktop test"}}

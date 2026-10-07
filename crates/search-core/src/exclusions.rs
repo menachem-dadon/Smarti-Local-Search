@@ -56,7 +56,7 @@ pub const ADDITIONAL_DEFAULTS: &[&str] = &[
     "backup-20[0-9][0-9][01][0-9][0-3][0-9]-[0-9]*",
 ];
 
-fn normalized(value: &str) -> String {
+pub(crate) fn normalized(value: &str) -> String {
     let value = value.trim().replace('\\', "/").to_lowercase();
     let value = if let Some(unc) = value.strip_prefix("//?/unc/") {
         format!("//{unc}")
@@ -72,6 +72,7 @@ pub struct Exclusions {
     components: HashSet<String>,
     absolute: Vec<String>,
     patterns: Vec<glob::Pattern>,
+    absolute_patterns: Vec<glob::Pattern>,
 }
 impl Exclusions {
     pub fn new(settings: &Settings, extra: &[String]) -> Self {
@@ -81,6 +82,7 @@ impl Exclusions {
             components: HashSet::new(),
             absolute: Vec::new(),
             patterns: Vec::new(),
+            absolute_patterns: Vec::new(),
         };
         for rule in settings.exclusions.iter().chain(extra) {
             let original = rule.trim();
@@ -91,6 +93,12 @@ impl Exclusions {
             // Windows drive, UNC, and native absolute paths use a component
             // boundary, so excluding C:/One does not exclude C:/OneMore.
             if rule.as_bytes().get(1) == Some(&b':') || rule.starts_with('/') {
+                if rule.contains(['*', '?']) {
+                    if let Ok(pattern) = glob::Pattern::new(&rule) {
+                        result.absolute_patterns.push(pattern);
+                    }
+                    continue;
+                }
                 // Rule matching never probes a remote server. Local paths may
                 // use Windows' short (8.3) user/profile aliases.
                 let canonical = if rule.starts_with("//") {
@@ -125,6 +133,24 @@ impl Exclusions {
         {
             return true;
         }
+        let mut ancestor = full.as_str();
+        loop {
+            if self.absolute_patterns.iter().any(|pattern| {
+                pattern.matches_with(
+                    ancestor,
+                    glob::MatchOptions {
+                        require_literal_separator: true,
+                        ..Default::default()
+                    },
+                )
+            }) {
+                return true;
+            }
+            match ancestor.rsplit_once('/') {
+                Some((parent, _)) => ancestor = parent,
+                None => break,
+            }
+        }
         let relative = normalized(&path.strip_prefix(root).unwrap_or(path).to_string_lossy());
         if relative.split('/').any(|c| self.components.contains(c)) {
             return true;
@@ -155,9 +181,64 @@ impl Exclusions {
     }
 }
 
+// Legacy per-location rules become visible global rules anchored to that
+// location. Moving "private" directly into the global names would broaden it
+// to unrelated locations. Escape literal brackets in the location itself.
+pub(crate) fn scoped_rule(root: &str, rule: &str) -> Option<String> {
+    let root = normalized(root);
+    let original = rule;
+    let mut rule = normalized(rule);
+    if rule.is_empty() {
+        return None;
+    }
+    if rule.as_bytes().get(1) == Some(&b':') || rule.starts_with('/') {
+        if !rule.starts_with("//") {
+            rule = std::fs::canonicalize(original)
+                .map(|path| normalized(&crate::engine::display_path(&path)))
+                .unwrap_or(rule);
+        }
+        return (rule == root || rule.starts_with(&format!("{root}/"))).then_some(rule);
+    }
+    let rule = if rule.contains(['*', '?', '[']) {
+        rule
+    } else {
+        glob::Pattern::escape(&rule)
+    };
+    Some(format!("{}/**/{rule}", glob::Pattern::escape(&root)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn migrated_rules_preserve_location_scope_and_literal_brackets() {
+        let root = Path::new("C:/Work [old]");
+        let settings = Settings {
+            exclusions: vec![
+                scoped_rule("C:/Work [old]", "private").unwrap(),
+                scoped_rule("C:/Work [old]", "*.tmp").unwrap(),
+                scoped_rule("C:/Work [old]", "foo/bar").unwrap(),
+                "C:/Other [private]".into(),
+            ],
+            ..Default::default()
+        };
+        let rules = Exclusions::new(&settings, &[]);
+        for path in [
+            "private/a.txt",
+            "deep/private/a.txt",
+            "file.tmp",
+            "deep/file.tmp",
+            "deep/foo/bar/a.txt",
+        ] {
+            assert!(rules.matches(&root.join(path), root), "{path}");
+        }
+        assert!(!rules.matches(
+            Path::new("C:/Elsewhere/private/a.txt"),
+            Path::new("C:/Elsewhere")
+        ));
+        assert!(!rules.matches(&root.join("private-more/a.txt"), root));
+        assert!(rules.matches(Path::new("C:/Other [private]/a.txt"), Path::new("C:/")));
+    }
     #[test]
     fn absolute_paths_case_boundaries_and_unc() {
         let settings = Settings {

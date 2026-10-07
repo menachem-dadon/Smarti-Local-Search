@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Smarti Local Search",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "com.smarti.localsearch",
   "build": { "beforeDevCommand": "npm run dev", "beforeBuildCommand": "npm run build", "devUrl": "http://127.0.0.1:1423", "frontendDist": "../dist" },
   "app": {

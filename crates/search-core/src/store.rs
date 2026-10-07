@@ -16,7 +16,7 @@ impl Store {
         }
         let db = Connection::open(path)?;
         db.busy_timeout(std::time::Duration::from_secs(10))?;
-        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA recursive_triggers=ON; PRAGMA cache_size=-32768;
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS roots(id INTEGER PRIMARY KEY,path TEXT UNIQUE NOT NULL,online INTEGER NOT NULL DEFAULT 1,exclusions TEXT NOT NULL DEFAULT '[]');
         CREATE TABLE IF NOT EXISTS files(id INTEGER PRIMARY KEY,root_id INTEGER REFERENCES roots(id) ON DELETE CASCADE,path TEXT UNIQUE NOT NULL,name TEXT NOT NULL,extension TEXT,kind TEXT,size INTEGER,modified INTEGER,created INTEGER,state TEXT NOT NULL DEFAULT 'queued',semantic INTEGER DEFAULT 0,error TEXT,online INTEGER DEFAULT 1,content_hash TEXT,seen INTEGER DEFAULT 0,stable_id TEXT,last_indexed INTEGER);
@@ -64,6 +64,31 @@ impl Store {
             CREATE TRIGGER IF NOT EXISTS files_job_priority AFTER UPDATE OF kind ON files WHEN old.kind<>new.kind BEGIN
                 UPDATE jobs SET priority=CASE new.kind WHEN 'text' THEN 0 WHEN 'code' THEN 1 WHEN 'document' THEN 2 WHEN 'pdf' THEN 2 WHEN 'image' THEN 3 WHEN 'audio' THEN 4 ELSE 5 END WHERE file_id=new.id;
             END;")?;
+        // Status queries use small covering/partial indices, never content
+        // rows or vector BLOBs. The queue mirrors kind/online for its summary.
+        if !job_columns.iter().any(|name| name == "kind") {
+            db.execute_batch(
+                "ALTER TABLE jobs ADD COLUMN kind TEXT;
+                ALTER TABLE jobs ADD COLUMN online INTEGER NOT NULL DEFAULT 1;
+                UPDATE jobs SET kind=(SELECT kind FROM files WHERE id=jobs.file_id),
+                    online=(SELECT online FROM files WHERE id=jobs.file_id);",
+            )?;
+        }
+        db.execute_batch("CREATE INDEX IF NOT EXISTS files_scope ON files(root_id,path);
+            CREATE INDEX IF NOT EXISTS files_root_semantic ON files(root_id,semantic);
+            CREATE INDEX IF NOT EXISTS files_semantic ON files(id) WHERE semantic=1;
+            CREATE INDEX IF NOT EXISTS files_errors ON files(id) WHERE error IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS chunks_vectors ON chunks(id) WHERE vector IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS jobs_summary ON jobs(online,kind);
+            CREATE INDEX IF NOT EXISTS jobs_ready ON jobs(online,state,priority,file_id);
+            CREATE TRIGGER IF NOT EXISTS jobs_summary_insert AFTER INSERT ON jobs BEGIN
+                UPDATE jobs SET kind=(SELECT kind FROM files WHERE id=new.file_id),
+                    online=(SELECT online FROM files WHERE id=new.file_id) WHERE file_id=new.file_id;
+            END;
+            CREATE TRIGGER IF NOT EXISTS jobs_summary_update AFTER UPDATE OF kind,online ON files
+                WHEN old.kind IS NOT new.kind OR old.online IS NOT new.online BEGIN
+                UPDATE jobs SET kind=new.kind,online=new.online WHERE file_id=new.id;
+            END;")?;
         let store = Self { db };
         let migrated: bool = store.db.query_row(
             "SELECT EXISTS(SELECT 1 FROM settings WHERE key='exclusions_v2')",
@@ -97,6 +122,28 @@ impl Store {
             store
                 .db
                 .execute("INSERT INTO settings VALUES('exclusions_v2','1')", [])?;
+            tx.commit()?;
+        }
+        // Accept legacy per-root settings even if an older installed version
+        // wrote them again. Conversion is transactional and preserves scope.
+        let roots = store.root_definitions()?;
+        if roots.iter().any(|root| !root.exclusions.is_empty()) {
+            let tx = store.db.unchecked_transaction()?;
+            let mut settings = store.settings()?;
+            for root in roots {
+                for rule in root.exclusions {
+                    if let Some(rule) = crate::exclusions::scoped_rule(&root.path, &rule)
+                        && !settings
+                            .exclusions
+                            .iter()
+                            .any(|existing| crate::exclusions::normalized(existing) == rule)
+                    {
+                        settings.exclusions.push(rule);
+                    }
+                }
+            }
+            store.save_settings(&settings)?;
+            tx.execute("UPDATE roots SET exclusions='[]'", [])?;
             tx.commit()?;
         }
         Ok(store)
@@ -148,8 +195,32 @@ impl Store {
         transaction.commit()?;
         Ok(())
     }
+    pub fn root_definitions(&self) -> Result<Vec<Root>> {
+        let mut query = self
+            .db
+            .prepare("SELECT id,path,online,exclusions FROM roots ORDER BY id")?;
+        Ok(query
+            .query_map([], |row| {
+                Ok(Root {
+                    id: row.get(0)?,
+                    path: row.get(1)?,
+                    online: row.get(2)?,
+                    exclusions: serde_json::from_str(&row.get::<_, String>(3)?).unwrap_or_default(),
+                    files: 0,
+                    indexed: 0,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+    pub fn pending_kinds(&self) -> Result<Vec<(String, u64)>> {
+        Ok(self
+            .db
+            .prepare("SELECT kind,count(*) FROM jobs WHERE online=1 GROUP BY kind")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?)
+    }
     pub fn roots(&self) -> Result<Vec<Root>> {
-        let mut q=self.db.prepare("SELECT r.id,r.path,r.online,r.exclusions,count(f.id),coalesce(sum(f.semantic),0) FROM roots r LEFT JOIN files f ON f.root_id=r.id GROUP BY r.id ORDER BY r.id")?;
+        let mut q=self.db.prepare("SELECT r.id,r.path,r.online,r.exclusions,count(f.id),coalesce(sum(f.semantic),0) FROM roots r LEFT JOIN files f INDEXED BY files_root_semantic ON f.root_id=r.id GROUP BY r.id ORDER BY r.id")?;
         Ok(q.query_map([], |r| {
             let s: String = r.get(3)?;
             Ok(Root {

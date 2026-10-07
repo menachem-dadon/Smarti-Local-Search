@@ -74,3 +74,44 @@ discovery progress and estimate text, automatic saving of selected full paths,
 and no horizontal overflow at 760 px. Screenshots and measured styles are under
 `artifacts/indexing-ui/`. This is browser rendering evidence; the Windows picker
 itself and a rebuilt installed application have not been exercised for this update.
+
+## Incremental indexing and global exclusions, 0.1.2
+
+The regression suite exercises Windows watcher events rather than requiring
+manual rescans: 100 same-length edits to one file coalesce into one job; a created
+20-file subtree adds only those files; a moved subtree retains IDs with no jobs
+for unchanged content; deletions remove its indexed records; excluded/cache and
+already-deleted temporary paths do not schedule root scans. Repeated scan requests
+coalesce, and stopped changes are retained for resume. A focused active-job test
+checks that interruption returns the job to queued state.
+
+The real-model corpus test verifies edit/rename without root rescans, unchanged
+chunk/vector IDs in every other file, and no content rebuild after explicit
+metadata reconciliation. It also checks extension changes between code/binary,
+restart, semantic configuration rollback and deliberate dimension rebuilding.
+The 150,000-file status test checks covering/partial query plans and reports mean
+refresh latency on this host; its indexed state and vectors are synthetic, and it
+does not represent inference throughput. The 2,000-file metadata test separately
+checks indexing, stopped exclusion edits and record pruning without deleting
+source files. Tests use private temporary data.
+
+Frontend checks cover the single global Exclusions category, autosave and native
+folder/file dialog responses. Browser QA confirms no exclusion action remains in
+location menus, RTL/search focus, ETA rendering and narrow-window containment.
+These are source/browser checks, not a physical Windows picker/DPI acceptance.
+
+Release/install evidence is recorded in `artifacts/release/verification.json`,
+`installed-verification.json`, `installed-payload.json`, `native-smoke.json` and
+`inference-fallback.json`. The installer upgrade test uses an isolated QA product
+identity and an existing private index, validates settings/IDs/vectors and the
+legacy exclusion migration, upgrades an orphan worker and a running app, rejects
+duplicate install directories/downgrades, removes stale managed DLLs and retains
+data at uninstall. The final report marks success only after checks finish and
+the final executable plus all resource hashes match the installed QA payload.
+Personal installation/index data are not changed by this validation. Interactive
+installer, physical native UI, clean-machine and signing acceptance remain separate.
+
+Final source checks: 28 core Rust tests (including the real-model test), one
+Tauri window test, 22 frontend tests and four Python tests pass. Workspace Clippy,
+formatting, TypeScript and production frontend build pass. The final synthetic
+150,000-file status measurement averaged 20.02 ms per refresh on this host.

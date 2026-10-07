@@ -115,6 +115,83 @@ fn upgrade_adds_defaults_once_and_keeps_user_choices() {
 }
 
 #[test]
+fn upgrade_unifies_legacy_exclusions_without_broadening_or_resetting_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("test.sqlite");
+    let store = Store::open(&path).unwrap();
+    let root = store.add_root("C:/My Files").unwrap();
+    let settings = Settings {
+        exclusions: vec!["my-global-rule".into()],
+        ..Default::default()
+    };
+    store.save_settings(&settings).unwrap();
+    store
+        .db
+        .execute(
+            "UPDATE roots SET exclusions=?1 WHERE id=?2",
+            params![
+                r#"["private","*.tmp","C:/My Files/one.txt","C:/Unrelated/ignored"]"#,
+                root
+            ],
+        )
+        .unwrap();
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    let expected = vec![
+        "my-global-rule",
+        "c:/my files/**/private",
+        "c:/my files/**/*.tmp",
+        "c:/my files/one.txt",
+    ];
+    assert_eq!(store.settings().unwrap().exclusions, expected);
+    assert!(store.roots().unwrap()[0].exclusions.is_empty());
+    drop(store);
+    assert_eq!(
+        Store::open(&path).unwrap().settings().unwrap().exclusions,
+        expected
+    );
+}
+
+#[test]
+fn queue_summary_tracks_kind_online_changes_replacement_and_cascade() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("test.sqlite")).unwrap();
+    let root = store.add_root("C:/Synthetic").unwrap();
+    store
+        .db
+        .execute(
+            "INSERT INTO files(root_id,path,name,kind) VALUES(?1,'one.txt','one.txt','text')",
+            [root],
+        )
+        .unwrap();
+    let id = store.db.last_insert_rowid();
+    store
+        .db
+        .execute("INSERT INTO jobs(file_id) VALUES(?1)", [id])
+        .unwrap();
+    assert_eq!(store.pending_kinds().unwrap(), vec![("text".into(), 1)]);
+    store
+        .db
+        .execute("UPDATE files SET kind='image',online=0 WHERE id=?1", [id])
+        .unwrap();
+    assert!(store.pending_kinds().unwrap().is_empty());
+    store
+        .db
+        .execute("UPDATE files SET online=1 WHERE id=?1", [id])
+        .unwrap();
+    store
+        .db
+        .execute("INSERT OR REPLACE INTO jobs(file_id) VALUES(?1)", [id])
+        .unwrap();
+    assert_eq!(store.pending_kinds().unwrap(), vec![("image".into(), 1)]);
+    store
+        .db
+        .execute("DELETE FROM roots WHERE id=?1", [root])
+        .unwrap();
+    assert!(store.pending_kinds().unwrap().is_empty());
+}
+
+#[test]
 fn identity_and_priority_queries_use_indices_and_preserve_queue_order() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("test.sqlite")).unwrap();

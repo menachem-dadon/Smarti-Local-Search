@@ -13,10 +13,13 @@ if(!$output.StartsWith($taskRoot+'\artifacts\',[StringComparison]::OrdinalIgnore
 New-Item -ItemType Directory -Force -Path $output | Out-Null
 $source=(Resolve-Path -LiteralPath $SourceNsi).Path
 $text=Get-Content -LiteralPath $source -Raw
+if(([regex]::Matches($text,'(?m)^!define PRODUCTNAME "Smarti Local Search"\r?$')).Count -ne 1 -or
+   ([regex]::Matches($text,'(?m)^!define BUNDLEID "com.smarti.localsearch"\r?$')).Count -ne 1){throw 'Unexpected NSIS identity; refusing QA repack'}
 # Repack the generated recipe with an isolated registry/shortcut identity. The
 # application and every runtime resource remain the actual release payload.
 $text=$text.Replace('!define PRODUCTNAME "Smarti Local Search"',('!define PRODUCTNAME "Smarti Local Search QA '+$TestName+'"'))
 $text=$text.Replace('!define BUNDLEID "com.smarti.localsearch"',('!define BUNDLEID "com.smarti.localsearch.qa.'+$TestName+'"'))
+if($text.Contains('!define PRODUCTNAME "Smarti Local Search"') -or $text.Contains('!define BUNDLEID "com.smarti.localsearch"')){throw 'QA isolation failed'}
 $text=$text.Replace('SetCompressor /SOLID "lzma"','SetCompress off')
 if($BinarySource){
     $binary=(Resolve-Path -LiteralPath $BinarySource).Path

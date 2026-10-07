@@ -43,6 +43,15 @@ def main():
     elif mode == 'check':
         expected = json.loads(expected_path.read_text(encoding='utf-8'))
         actual = json.loads(json.dumps(snapshot(base)))
+        # 0.1.2 intentionally unifies the legacy root exclusions. Their scope
+        # and all indexed IDs/vectors/settings still need to survive upgrading.
+        with sqlite3.connect(base / 'data/metadata.sqlite') as db:
+            settings = json.loads(db.execute("SELECT value FROM settings WHERE key='app'").fetchone()[0])
+            for _, path, rules in expected['roots']:
+                for rule in json.loads(rules):
+                    scoped = path.replace('\\', '/').lower().rstrip('/') + '/**/' + rule
+                    assert scoped in settings['exclusions'], 'Legacy scoped exclusion lost'
+            expected['roots'] = [[id, path, '[]'] for id, path, _ in expected['roots']]
         assert actual == expected, 'Legacy settings, roots, file IDs or vectors changed during upgrade'
         with sqlite3.connect(base / 'data/metadata.sqlite') as db:
             assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'

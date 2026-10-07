@@ -133,10 +133,7 @@ fn dispatch(
             e.remove_root(id()?)?;
             serde_json::Value::Null
         }
-        "update_root" => {
-            e.update_root(id()?, serde_json::from_value(args["exclusions"].clone())?)?;
-            serde_json::Value::Null
-        }
+
         "start_index" => {
             e.start_index(args["root"].as_i64())?;
             serde_json::Value::Null

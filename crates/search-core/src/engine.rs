@@ -1,4 +1,5 @@
 use crate::{
+    changes::Changes,
     exclusions::Exclusions,
     extract,
     inference::Inference,
@@ -12,7 +13,7 @@ use anyhow::{Context, Result, ensure};
 use notify::{RecursiveMode, Watcher};
 use rusqlite::params;
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, RwLock,
@@ -23,6 +24,20 @@ use std::{
 };
 
 pub type EventSink = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
+struct PendingJob<'a> {
+    store: &'a Mutex<Store>,
+    id: i64,
+}
+impl Drop for PendingJob<'_> {
+    fn drop(&mut self) {
+        // Completed commits remove their job. Interrupted work must become
+        // eligible again on resume, without requiring an application restart.
+        let _ = self.store.lock().unwrap().db.execute(
+            "UPDATE jobs SET state='queued' WHERE file_id=?1 AND state='active'",
+            [self.id],
+        );
+    }
+}
 pub struct Engine {
     pub store: Mutex<Store>,
     pub vectors: Mutex<Vectors>,
@@ -34,13 +49,15 @@ pub struct Engine {
     pub stopped: AtomicBool,
     pub running: AtomicBool,
     pub latest_query: AtomicU64,
-    pub scan: Mutex<Vec<i64>>,
+    pub scan: Mutex<BTreeSet<i64>>,
+    scanning: Mutex<BTreeSet<i64>>,
     pub events: EventSink,
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
     work: Mutex<()>,
     configuration: RwLock<()>,
     last_emit: Mutex<Instant>,
-    changes: Mutex<HashMap<PathBuf, Instant>>,
+    changes: Mutex<Changes>,
+    watch_rules: RwLock<(Vec<Root>, Arc<Exclusions>)>,
     progress: Mutex<Progress>,
 }
 impl Engine {
@@ -118,13 +135,18 @@ impl Engine {
             stopped: AtomicBool::new(stopped),
             running: AtomicBool::new(false),
             latest_query: AtomicU64::new(0),
-            scan: Mutex::new(Vec::new()),
+            scan: Mutex::new(BTreeSet::new()),
+            scanning: Mutex::new(BTreeSet::new()),
             events,
             watcher: Mutex::new(None),
             work: Mutex::new(()),
             configuration: RwLock::new(()),
             last_emit: Mutex::new(Instant::now() - Duration::from_secs(1)),
-            changes: Mutex::new(HashMap::new()),
+            changes: Mutex::new(Changes::default()),
+            watch_rules: RwLock::new((
+                Vec::new(),
+                Arc::new(Exclusions::new(&Settings::default(), &[])),
+            )),
             progress: Mutex::new(Progress::default()),
         });
         engine.watch()?;
@@ -143,7 +165,8 @@ impl Engine {
             .ok()
             .as_deref()
             == Some("1");
-        for root in engine.roots()? {
+        let roots = engine.store.lock().unwrap().root_definitions()?;
+        for root in roots {
             let journal = crate::platform::journal_checkpoint(Path::new(&root.path));
             let saved = engine
                 .store
@@ -157,7 +180,7 @@ impl Engine {
                 )
                 .ok();
             if exclusions_changed || journal.is_none() || journal != saved {
-                engine.scan.lock().unwrap().push(root.id);
+                engine.scan.lock().unwrap().insert(root.id);
             }
         }
         engine.status.lock().unwrap().discovery_complete = engine.scan.lock().unwrap().is_empty();
@@ -180,27 +203,53 @@ impl Engine {
                     let _ = s.db.execute("INSERT OR REPLACE INTO jobs(file_id) SELECT id FROM files WHERE state='partial' AND error LIKE 'Semantic model unavailable%'", []);
                 }
                 was_ready = ready;
-                let mut paths = Vec::new();
-                e.changes.lock().unwrap().retain(|path, time| {
-                    if time.elapsed() > Duration::from_millis(500) {
-                        paths.push(path.clone());
-                        false
-                    } else {
-                        true
-                    }
-                });
-                paths.sort_by_key(|path| !path.exists());
-                for path in paths {
-                    let _ = e.changed(&path);
-                }
                 if e.paused.load(Ordering::Relaxed) || e.stopped.load(Ordering::Relaxed) {
                     thread::sleep(Duration::from_millis(250));
                     continue;
                 }
-                let scans = std::mem::take(&mut *e.scan.lock().unwrap());
+                let scans: Vec<_> = {
+                    let mut pending = e.scan.lock().unwrap();
+                    let scans = std::mem::take(&mut *pending);
+                    e.scanning.lock().unwrap().extend(&scans);
+                    scans.into_iter().collect()
+                };
+                let paths = e.changes.lock().unwrap().ready();
+                let (roots, rules) = e.watch_rules.read().unwrap().clone();
+                let mut covered = Vec::<PathBuf>::new();
+                for (path, recursive) in paths {
+                    if e.stopped.load(Ordering::Relaxed) {
+                        e.changes.lock().unwrap().retry(path, recursive);
+                        continue;
+                    }
+                    if roots
+                        .iter()
+                        .any(|root| scans.contains(&root.id) && path.starts_with(&root.path))
+                    {
+                        continue;
+                    }
+                    if covered.iter().any(|parent| path.starts_with(parent)) {
+                        continue;
+                    }
+                    if recursive && path.is_dir() {
+                        covered.push(path.clone());
+                    }
+                    if let Err(error) = e.changed(&path, recursive, &roots, &rules) {
+                        let _ = e.store.lock().unwrap().log(
+                            "error",
+                            None,
+                            &display_path(&path),
+                            &error.to_string(),
+                        );
+                    }
+                }
                 if !scans.is_empty() {
+                    if e.stopped.load(Ordering::Relaxed) {
+                        e.scan.lock().unwrap().extend(scans);
+                        e.scanning.lock().unwrap().clear();
+                        continue;
+                    }
                     e.running.store(true, Ordering::Relaxed);
-                    if let Err(err) = e.count_discovery(&scans) {
+                    if let Err(err) = e.begin_discovery(&scans) {
                         let _ = e
                             .store
                             .lock()
@@ -209,7 +258,10 @@ impl Engine {
                     }
                     for (position, id) in scans.iter().enumerate() {
                         if e.stopped.load(Ordering::Relaxed) {
-                            e.scan.lock().unwrap().extend_from_slice(&scans[position..]);
+                            e.scan
+                                .lock()
+                                .unwrap()
+                                .extend(scans[position..].iter().copied());
                             break;
                         }
                         if let Err(err) = e.discover(*id) {
@@ -220,14 +272,27 @@ impl Engine {
                                     .log("error", None, "", &err.to_string());
                         }
                         if e.stopped.load(Ordering::Relaxed) {
-                            e.scan.lock().unwrap().extend_from_slice(&scans[position..]);
+                            e.scan
+                                .lock()
+                                .unwrap()
+                                .extend(scans[position..].iter().copied());
                             break;
                         }
                     }
                     last_reconcile = Instant::now();
+                    e.scanning.lock().unwrap().clear();
+                    {
+                        let mut progress = e.progress.lock().unwrap();
+                        progress.discovery_total = progress.discovery_done;
+                    }
+                    let discovery_complete =
+                        !e.stopped.load(Ordering::Relaxed) && e.scan.lock().unwrap().is_empty();
                     let mut status = e.status.lock().unwrap();
                     status.discovery_counting = false;
-                    status.discovery_complete = !e.stopped.load(Ordering::Relaxed);
+                    status.discovery_complete = discovery_complete;
+                    if e.stopped.load(Ordering::Relaxed) {
+                        e.running.store(false, Ordering::Relaxed);
+                    }
                     drop(status);
                     if !e.stopped.load(Ordering::Relaxed) {
                         let _ = e.store.lock().unwrap().db.execute(
@@ -244,7 +309,7 @@ impl Engine {
                     let s = e.store.lock().unwrap();
                     let media_paused = s.settings().is_ok_and(|settings| settings.pause_on_battery)
                         && crate::platform::power_constrained();
-                    s.db.query_row("SELECT f.id,f.kind FROM jobs j INDEXED BY jobs_dispatch JOIN files f ON f.id=j.file_id WHERE j.state='queued' AND f.online=1 AND (?1=0 OR f.kind NOT IN ('image','audio','video')) ORDER BY j.priority,j.file_id LIMIT 1",[media_paused],|r|Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?))).ok()
+                    s.db.query_row("SELECT file_id,kind FROM jobs INDEXED BY jobs_ready WHERE state='queued' AND online=1 AND (?1=0 OR kind NOT IN ('image','audio','video')) ORDER BY priority,file_id LIMIT 1",[media_paused],|r|Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?))).ok()
                 };
                 if let Some((id, kind)) = job {
                     let started = Instant::now();
@@ -289,31 +354,25 @@ impl Engine {
                             (e.events)("index-complete", serde_json::json!({"time":now()}));
                         }
                     }
-                    // Reconciliation runs only while the processing queue is idle,
-                    // and the timer starts after a completed scan, preventing an
-                    // hours-long scan from immediately scheduling another one.
-                    if last_reconcile.elapsed() > Duration::from_secs(300) {
-                        if let Ok(roots) = e.roots() {
-                            let mut scan = e.scan.lock().unwrap();
-                            for root in roots {
-                                let journal =
-                                    crate::platform::journal_checkpoint(Path::new(&root.path));
-                                let saved = e
-                                    .store
-                                    .lock()
-                                    .unwrap()
-                                    .db
-                                    .query_row(
-                                        "SELECT value FROM settings WHERE key=?1",
-                                        [format!("journal:{}", root.id)],
-                                        |r| r.get::<_, String>(0),
-                                    )
-                                    .ok();
-                                if (journal.is_none() || journal != saved)
-                                    && !scan.contains(&root.id)
-                                {
-                                    scan.push(root.id);
-                                }
+                    // Healthy watchers need no periodic full-root scan. Recover
+                    // an overflow once, while idle; also reconnect offline roots.
+                    let rescan = std::mem::take(&mut e.changes.lock().unwrap().rescan);
+                    if rescan || last_reconcile.elapsed() > Duration::from_secs(300) {
+                        let degraded = e.status.lock().unwrap().watcher == "degraded";
+                        let roots = e.root_definitions();
+                        if let Ok(roots) = roots {
+                            let ids: Vec<_> = roots
+                                .iter()
+                                .filter(|root| {
+                                    rescan
+                                        || degraded
+                                        || root.online != Path::new(&root.path).exists()
+                                })
+                                .map(|root| root.id)
+                                .collect();
+                            if !ids.is_empty() {
+                                e.queue_scan(ids);
+                                let _ = e.watch();
                             }
                         }
                         last_reconcile = Instant::now();
@@ -436,21 +495,10 @@ impl Engine {
         self.emit_status();
         Ok(())
     }
-    pub fn update_root(&self, id: i64, exclusions: Vec<String>) -> Result<()> {
-        self.store.lock().unwrap().db.execute(
-            "UPDATE roots SET exclusions=?2 WHERE id=?1",
-            params![id, serde_json::to_string(&exclusions)?],
-        )?;
-        self.queue_scan([id]);
-        Ok(())
-    }
     fn queue_scan(&self, ids: impl IntoIterator<Item = i64>) {
         let mut scan = self.scan.lock().unwrap();
-        for id in ids {
-            if !scan.contains(&id) {
-                scan.push(id);
-            }
-        }
+        let scanning = self.scanning.lock().unwrap();
+        scan.extend(ids.into_iter().filter(|id| !scanning.contains(id)));
         self.status.lock().unwrap().discovery_complete = false;
     }
     pub fn start_index(&self, root: Option<i64>) -> Result<()> {
@@ -587,7 +635,14 @@ impl Engine {
         }
         if old.exclusions != settings.exclusions || old.sensitive_files != settings.sensitive_files
         {
-            self.queue_scan(self.roots()?.iter().map(|r| r.id));
+            self.refresh_watch_rules()?;
+            // An exclusion change during a scan needs one follow-up pass with
+            // the new rules; ordinary repeated rescan requests are coalesced.
+            self.scan
+                .lock()
+                .unwrap()
+                .extend(self.root_definitions()?.iter().map(|root| root.id));
+            self.status.lock().unwrap().discovery_complete = false;
         }
         self.emit_status();
         (self.events)("settings-changed", serde_json::to_value(&settings)?);
@@ -602,73 +657,73 @@ impl Engine {
     fn excluded(path: &Path, root: &Path, settings: &Settings, extra: &[String]) -> bool {
         Exclusions::new(settings, extra).matches(path, root)
     }
-    fn count_discovery(&self, ids: &[i64]) -> Result<()> {
-        self.progress.lock().unwrap().reset_discovery();
-        {
-            let mut status = self.status.lock().unwrap();
-            status.stage = "discovery".into();
-            status.discovery_counting = true;
-            status.discovery_complete = false;
-        }
-        self.emit_status();
-        let settings = self.settings()?;
-        for root in self.roots()?.into_iter().filter(|r| ids.contains(&r.id)) {
-            let path = Path::new(&root.path);
-            if !path.exists() {
-                continue;
-            }
-            let rules = Exclusions::new(&settings, &root.exclusions);
-            for entry in walkdir::WalkDir::new(path)
-                .follow_links(false)
-                .into_iter()
-                .filter_entry(|e| {
-                    !rules.matches(e.path(), path)
-                        && !e.path().starts_with(&self.data)
-                        && !e.path().starts_with(&self.resources)
-                })
-            {
-                if !self.checkpoint() {
-                    return Ok(());
-                }
-                if let Ok(entry) = entry
-                    && entry.file_type().is_file()
-                {
-                    self.progress.lock().unwrap().discovery_total += 1;
-                }
-            }
-        }
-        self.status.lock().unwrap().discovery_counting = false;
-        self.progress.lock().unwrap().start_discovery();
+    fn root_definitions(&self) -> Result<Vec<Root>> {
+        self.store.lock().unwrap().root_definitions()
+    }
+    fn refresh_watch_rules(&self) -> Result<()> {
+        *self.watch_rules.write().unwrap() = (
+            self.root_definitions()?,
+            Arc::new(Exclusions::new(&self.settings()?, &[])),
+        );
+        Ok(())
+    }
+    fn begin_discovery(&self, ids: &[i64]) -> Result<()> {
+        // One walk only. Existing metadata gives a provisional denominator;
+        // a brand-new location stays "Estimating" until its total is known.
+        let previous: u64 = self
+            .roots()?
+            .iter()
+            .filter(|root| ids.contains(&root.id))
+            .map(|root| root.files)
+            .sum();
+        let mut progress = self.progress.lock().unwrap();
+        progress.reset_discovery();
+        progress.discovery_total = previous;
+        progress.start_discovery();
+        drop(progress);
+        let mut status = self.status.lock().unwrap();
+        status.stage = "discovery".into();
+        status.discovery_counting = previous == 0;
+        status.discovery_complete = false;
+        drop(status);
         self.emit_status();
         Ok(())
     }
     fn discover(&self, id: i64) -> Result<()> {
+        self.discover_scope(id, None)
+    }
+    fn discover_scope(&self, id: i64, scope: Option<(&Path, bool)>) -> Result<()> {
         let _work = self.work.lock().unwrap();
         let root = self
-            .roots()?
+            .root_definitions()?
             .into_iter()
             .find(|r| r.id == id)
             .context("Location not found")?;
         let path = PathBuf::from(&root.path);
         let online = path.exists();
-        {
+        if scope.is_none() {
             let s = self.store.lock().unwrap();
             s.db.execute(
                 "UPDATE roots SET online=?2 WHERE id=?1",
                 params![id, online],
             )?;
             s.db.execute(
-                "UPDATE files SET online=?2 WHERE root_id=?1",
+                "UPDATE files SET online=?2 WHERE root_id=?1 AND online<>?2",
                 params![id, online],
             )?;
         }
         if !online {
             return Ok(());
         }
-        self.status.lock().unwrap().stage = "discovery".into();
+        if scope.is_none() {
+            self.status.lock().unwrap().stage = "discovery".into();
+        }
         let settings = self.settings()?;
         let seen = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
-        let journal = crate::platform::journal_checkpoint(&path);
+        let journal = scope
+            .is_none()
+            .then(|| crate::platform::journal_checkpoint(&path))
+            .flatten();
         let mut count = 0;
         let rules = Exclusions::new(&settings, &root.exclusions);
         // Explicit exclusions also remove old index entries when another part
@@ -676,13 +731,10 @@ impl Engine {
         // otherwise included files from being mistaken for deleted files.
         let removed = {
             let s = self.store.lock().unwrap();
-            let files =
-                s.db.prepare("SELECT id,path FROM files WHERE root_id=?1")?
-                    .query_map([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
+            let files = Self::scope_files(&s, id, scope)?;
             let tx = s.db.unchecked_transaction()?;
             let mut chunks = Vec::new();
-            for (file, filename) in files {
+            for (file, filename, _) in files {
                 let filename = Path::new(&filename);
                 if rules.matches(filename, &path)
                     || filename.starts_with(&self.data)
@@ -705,7 +757,12 @@ impl Engine {
                 vectors.remove(id)?;
             }
         }
-        let walker = walkdir::WalkDir::new(&path)
+        let walker = walkdir::WalkDir::new(scope.map_or(path.as_path(), |(path, _)| path))
+            .max_depth(if scope.is_some_and(|(_, recursive)| !recursive) {
+                1
+            } else {
+                usize::MAX
+            })
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
@@ -750,9 +807,8 @@ impl Engine {
                 );
                 continue;
             }
-            {
-                let mut progress = self.progress.lock().unwrap();
-                progress.discovered_file();
+            if scope.is_none() {
+                self.progress.lock().unwrap().discovered_file();
             }
             count += 1;
             if count % 128 == 0 {
@@ -764,22 +820,28 @@ impl Engine {
         }
         // Do not tombstone unseen files when enumeration was incomplete.
         if errors == 0 {
-            let mut s = self.store.lock().unwrap();
-            let mut q=s.db.prepare("SELECT c.id FROM chunks c JOIN files f ON f.id=c.file_id WHERE f.root_id=?1 AND f.seen<?2")?;
-            let ids = q
-                .query_map(params![id, seen], |r| r.get::<_, i64>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            drop(q);
-            let tx = s.db.transaction()?;
-            tx.execute(
-                "DELETE FROM files WHERE root_id=?1 AND seen<?2",
-                params![id, seen],
-            )?;
-            tx.commit()?;
-            drop(s);
+            let removed = {
+                let s = self.store.lock().unwrap();
+                let files = Self::scope_files(&s, id, scope)?;
+                let tx = s.db.unchecked_transaction()?;
+                let mut chunks = Vec::<u64>::new();
+                for (file, _, _) in files
+                    .into_iter()
+                    .filter(|(_, _, generation)| *generation < seen)
+                {
+                    chunks.extend(
+                        s.db.prepare("SELECT id FROM chunks WHERE file_id=?1")?
+                            .query_map([file], |row| row.get::<_, u64>(0))?
+                            .collect::<rusqlite::Result<Vec<_>>>()?,
+                    );
+                    tx.execute("DELETE FROM files WHERE id=?1", [file])?;
+                }
+                tx.commit()?;
+                chunks
+            };
             let vectors = self.vectors.lock().unwrap();
-            for id in ids {
-                vectors.remove(id as u64)?
+            for chunk in removed {
+                vectors.remove(chunk)?;
             }
             drop(vectors);
             if let Some(journal) = journal {
@@ -790,9 +852,13 @@ impl Engine {
             }
         }
         self.store.lock().unwrap().log(
-            "scan",
+            if scope.is_none() {
+                "scan"
+            } else {
+                "scan_subtree"
+            },
             None,
-            &root.path,
+            &display_path(scope.map_or(path.as_path(), |(path, _)| path)),
             &format!("Discovered {count} files; {errors} unreadable locations"),
         )?;
         Ok(())
@@ -831,7 +897,6 @@ impl Engine {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         let s = self.store.lock().unwrap();
-        let tx = s.db.unchecked_transaction()?;
         let mut old =
             s.db.query_row(
                 "SELECT id,size,mtime_ns,stable_id FROM files WHERE path=?1",
@@ -846,6 +911,14 @@ impl Engine {
                 },
             )
             .ok();
+        if old
+            .as_ref()
+            .is_some_and(|old| old.1 == size && old.2 == mtime_ns)
+        {
+            s.db.execute("UPDATE files SET seen=CASE WHEN ?2=0 THEN seen ELSE ?2 END,online=1 WHERE id=?1 AND (?2<>0 OR online<>1)", params![old.as_ref().unwrap().0,seen])?;
+            return Ok(());
+        }
+        let tx = s.db.unchecked_transaction()?;
         // A known path needs no native handle or identity lookup. New paths
         // still use the stable NTFS identity to preserve rename semantics.
         let stable = old
@@ -901,6 +974,10 @@ impl Engine {
             s.file(id)?
         };
         let path = PathBuf::from(&file.path);
+        let _pending = PendingJob {
+            store: &self.store,
+            id,
+        };
         let root: (String, String) = self.store.lock().unwrap().db.query_row(
             "SELECT path,exclusions FROM roots WHERE id=?1",
             [file.root_id],
@@ -934,16 +1011,26 @@ impl Engine {
             _ => false,
         };
         if !enabled {
-            let store = self.store.lock().unwrap();
-            store
-                .db
-                .execute("DELETE FROM jobs WHERE file_id=?1", [id])?;
-            store.db.execute(
-                "UPDATE files SET state='metadata_only' WHERE id=?1 AND semantic=0",
-                [id],
-            )?;
+            // Changed content with processing disabled must not retain stale
+            // searchable chunks (also covers a text -> binary extension move).
+            let old = self
+                .store
+                .lock()
+                .unwrap()
+                .commit_chunks(id, &[], "", None)?;
+            let vectors = self.vectors.lock().unwrap();
+            for id in old {
+                vectors.remove(id as u64)?;
+            }
             return Ok(());
         }
+        let snapshot = std::fs::metadata(&path)?;
+        self.upsert_file(file.root_id, &path, 0)?;
+        ensure!(
+            !["text", "code"].contains(&file.kind.as_str())
+                || snapshot.len() <= settings.max_text_mb * 1024 * 1024,
+            "Text exceeds the configured extraction size limit"
+        );
         self.status.lock().unwrap().stage = file.kind.clone();
         // Stream the content hash once; never read arbitrary binaries as text.
         let hash = {
@@ -966,6 +1053,11 @@ impl Engine {
             |r| r.get::<_, Option<String>>(0),
         )?;
         if old_hash.as_deref() == Some(&hash) && file.semantic {
+            let current = std::fs::metadata(&path)?;
+            if current.len() != snapshot.len() || current.modified()? != snapshot.modified()? {
+                self.upsert_file(file.root_id, &path, 0)?;
+                return Ok(());
+            }
             self.store
                 .lock()
                 .unwrap()
@@ -974,10 +1066,6 @@ impl Engine {
             return Ok(());
         }
         let mut chunks = if ["text", "code"].contains(&file.kind.as_str()) {
-            ensure!(
-                file.size <= settings.max_text_mb * 1024 * 1024,
-                "Text exceeds the configured extraction size limit"
-            );
             let bytes = std::fs::read(&path)?;
             let text = extract::decode(&bytes);
             if file.kind == "code" {
@@ -1101,6 +1189,12 @@ impl Engine {
             }
             indexed.extend(batch.into_iter().zip(vectors));
         }
+        let current = std::fs::metadata(&path)?;
+        if current.len() != snapshot.len() || current.modified()? != snapshot.modified()? {
+            self.upsert_file(file.root_id, &path, 0)?;
+            self.cleanup_media(&path)?;
+            return Ok(());
+        }
         let partial = errors.first().map(String::as_str);
         let old = self
             .store
@@ -1161,68 +1255,154 @@ impl Engine {
         Ok(())
     }
     fn watch(self: &Arc<Self>) -> Result<()> {
+        self.refresh_watch_rules()?;
         let weak = Arc::downgrade(self);
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                if let (Some(e), Ok(event)) = (weak.upgrade(), event) {
-                    if event.kind.is_access() {
-                        return;
+                let Some(e) = weak.upgrade() else {
+                    return;
+                };
+                match event {
+                    Ok(event) => {
+                        let (roots, rules) = &*e.watch_rules.read().unwrap();
+                        e.changes.lock().unwrap().record(event, |path| {
+                            !path.starts_with(&e.data)
+                                && !path.starts_with(&e.resources)
+                                && roots.iter().any(|root| {
+                                    path.starts_with(&root.path)
+                                        && !rules.matches(path, Path::new(&root.path))
+                                })
+                        });
                     }
-                    let mut changes = e.changes.lock().unwrap();
-                    for path in event.paths {
-                        changes.insert(path, Instant::now());
+                    Err(_) => {
+                        e.changes.lock().unwrap().rescan = true;
                     }
                 }
             })?;
-        for root in self.roots()? {
-            if Path::new(&root.path).exists() {
-                let _ = watcher.watch(Path::new(&root.path), RecursiveMode::Recursive);
+        let mut active = true;
+        for root in self.root_definitions()? {
+            if Path::new(&root.path).exists()
+                && watcher
+                    .watch(Path::new(&root.path), RecursiveMode::Recursive)
+                    .is_err()
+            {
+                active = false;
             }
         }
         *self.watcher.lock().unwrap() = Some(watcher);
-        self.status.lock().unwrap().watcher = "active".into();
+        self.status.lock().unwrap().watcher = if active { "active" } else { "degraded" }.into();
         Ok(())
     }
-    fn changed(&self, path: &Path) -> Result<()> {
-        if path.starts_with(&self.data) || path.starts_with(&self.resources) {
+    fn scope_files(
+        s: &Store,
+        root: i64,
+        scope: Option<(&Path, bool)>,
+    ) -> Result<Vec<(i64, String, i64)>> {
+        let read = |row: &rusqlite::Row<'_>| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        };
+        if let Some((path, recursive)) = scope {
+            let text = display_path(path);
+            let separator = std::path::MAIN_SEPARATOR;
+            let base = text.trim_end_matches(separator);
+            let lower = format!("{base}{separator}");
+            let upper = format!("{base}{}", char::from_u32(separator as u32 + 1).unwrap());
+            let files =
+                s.db.prepare(
+                    "SELECT id,path,seen FROM files WHERE root_id=?1 AND path>=?2 AND path<?3",
+                )?
+                .query_map(params![root, lower, upper], read)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(files
+                .into_iter()
+                .filter(|(_, filename, _)| recursive || Path::new(filename).parent() == Some(path))
+                .collect())
+        } else {
+            Ok(s.db
+                .prepare("SELECT id,path,seen FROM files WHERE root_id=?1")?
+                .query_map([root], read)?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+        }
+    }
+    fn changed(
+        &self,
+        path: &Path,
+        recursive: bool,
+        roots: &[Root],
+        rules: &Exclusions,
+    ) -> Result<()> {
+        let Some(root) = roots.iter().find(|root| path.starts_with(&root.path)) else {
+            return Ok(());
+        };
+        if path.starts_with(&self.data)
+            || path.starts_with(&self.resources)
+            || rules.matches(path, Path::new(&root.path))
+        {
             return Ok(());
         }
-        let settings = self.settings()?;
-        for root in self.roots()? {
-            let base = PathBuf::from(&root.path);
-            if path.starts_with(&base) && !Self::excluded(path, &base, &settings, &root.exclusions)
-            {
-                if path.is_file() {
-                    self.upsert_file(
-                        root.id,
-                        path,
-                        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
-                    )?
-                } else if !path.exists() {
-                    let s = self.store.lock().unwrap();
-                    let id =
-                        s.db.query_row(
-                            "SELECT id FROM files WHERE path=?1",
-                            [display_path(path)],
-                            |r| r.get::<_, i64>(0),
-                        )
-                        .ok();
-                    if let Some(id) = id {
-                        let chunks = s.chunks(id)?;
-                        s.db.execute("DELETE FROM files WHERE id=?1", [id])?;
-                        drop(s);
-                        let v = self.vectors.lock().unwrap();
-                        for c in chunks {
-                            v.remove(c.id as u64)?
-                        }
-                    } else {
-                        drop(s);
-                        self.scan.lock().unwrap().push(root.id);
-                    }
-                } else {
-                    self.scan.lock().unwrap().push(root.id)
+        if !Path::new(&root.path).try_exists()? {
+            let store = self.store.lock().unwrap();
+            store
+                .db
+                .execute("UPDATE roots SET online=0 WHERE id=?1", [root.id])?;
+            store.db.execute(
+                "UPDATE files SET online=0 WHERE root_id=?1 AND online<>0",
+                [root.id],
+            )?;
+            return Ok(());
+        }
+        // Inaccessible paths are not deletions. Preserve their cached content.
+        if let Err(error) = std::fs::symlink_metadata(path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(error.into());
+        }
+        if path.is_file() {
+            if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+                return Ok(());
+            }
+            self.upsert_file(root.id, path, 0)?;
+        } else if path.is_dir() {
+            // Folder mtime events inspect direct children only. Creates/moves
+            // enumerate that subtree once, never the entire indexing location.
+            self.discover_scope(root.id, Some((path, recursive)))?;
+            if self.stopped.load(Ordering::Relaxed) {
+                self.changes
+                    .lock()
+                    .unwrap()
+                    .retry(path.to_owned(), recursive);
+            }
+        } else {
+            let removed = {
+                let s = self.store.lock().unwrap();
+                let mut files = Self::scope_files(&s, root.id, Some((path, true)))?;
+                if let Ok(id) = s.db.query_row(
+                    "SELECT id FROM files WHERE path=?1",
+                    [display_path(path)],
+                    |row| row.get::<_, i64>(0),
+                ) {
+                    files.push((id, display_path(path), 0));
                 }
-                break;
+                let tx = s.db.unchecked_transaction()?;
+                let mut chunks = Vec::<u64>::new();
+                for (id, _, _) in files {
+                    chunks.extend(
+                        s.db.prepare("SELECT id FROM chunks WHERE file_id=?1")?
+                            .query_map([id], |row| row.get::<_, u64>(0))?
+                            .collect::<rusqlite::Result<Vec<_>>>()?,
+                    );
+                    tx.execute("DELETE FROM files WHERE id=?1", [id])?;
+                }
+                tx.commit()?;
+                chunks
+            };
+            let vectors = self.vectors.lock().unwrap();
+            for id in removed {
+                vectors.remove(id)?;
             }
         }
         Ok(())
@@ -1263,9 +1443,7 @@ impl Engine {
         } else {
             progress.discovery_eta()
         };
-        let pending = s.db.prepare("SELECT f.kind,count(*) FROM jobs j JOIN files f ON f.id=j.file_id WHERE f.online=1 GROUP BY f.kind")?
-            .query_map([], |r| Ok((r.get::<_,String>(0)?,r.get::<_,u64>(1)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let pending = s.pending_kinds()?;
         let (eta, provisional) = progress.index_eta(&pending);
         status.index_eta_seconds = eta;
         status.index_eta_provisional = provisional;
@@ -1293,7 +1471,7 @@ impl Engine {
     }
     fn emit_status(&self) {
         let mut last = self.last_emit.lock().unwrap();
-        if last.elapsed() < Duration::from_millis(150) {
+        if last.elapsed() < Duration::from_millis(350) {
             return;
         }
         *last = Instant::now();
@@ -1617,5 +1795,76 @@ pub fn display_path(path: &Path) -> String {
         format!("\\\\{p}")
     } else {
         s.strip_prefix("\\\\?\\").unwrap_or(&s).to_string()
+    }
+}
+
+#[cfg(test)]
+mod job_tests {
+    use super::*;
+    #[test]
+    fn stopping_an_active_job_leaves_it_queued_for_resume() {
+        let temp = tempfile::tempdir().unwrap();
+        let corpus = temp.path().join("corpus");
+        let resources = temp.path().join("resources");
+        let data = temp.path().join("index");
+        std::fs::create_dir(&corpus).unwrap();
+        std::fs::create_dir(&resources).unwrap();
+        let filename = corpus.join("large.txt");
+        std::fs::write(
+            &filename,
+            "A searchable paragraph about local indexing.\n".repeat(800),
+        )
+        .unwrap();
+        let store = Store::open(&data.join("data/metadata.sqlite")).unwrap();
+        store
+            .db
+            .execute("INSERT INTO settings VALUES('index_stopped','1')", [])
+            .unwrap();
+        drop(store);
+        let engine = Engine::open(data, resources, Arc::new(|_, _| {})).unwrap();
+        let root = engine.add_root(&corpus).unwrap();
+        let filename = PathBuf::from(display_path(&std::fs::canonicalize(filename).unwrap()));
+        engine.paused.store(true, Ordering::Relaxed);
+        engine.stopped.store(false, Ordering::Relaxed);
+        engine.upsert_file(root, &filename, 1).unwrap();
+        let id = engine
+            .store
+            .lock()
+            .unwrap()
+            .db
+            .query_row("SELECT id FROM files", [], |row| row.get::<_, i64>(0))
+            .unwrap();
+        let worker = engine.clone();
+        let thread = thread::spawn(move || worker.index_file(id));
+        let started = Instant::now();
+        loop {
+            let state: String = engine
+                .store
+                .lock()
+                .unwrap()
+                .db
+                .query_row("SELECT state FROM jobs WHERE file_id=?1", [id], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            if state == "active" {
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(10));
+            thread::sleep(Duration::from_millis(10));
+        }
+        engine.control("stop").unwrap();
+        thread.join().unwrap().unwrap();
+        let state: String = engine
+            .store
+            .lock()
+            .unwrap()
+            .db
+            .query_row("SELECT state FROM jobs WHERE file_id=?1", [id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(state, "queued");
+        assert_eq!(engine.status().unwrap().semantic_files, 0);
     }
 }
