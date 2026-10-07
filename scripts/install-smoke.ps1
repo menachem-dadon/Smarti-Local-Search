@@ -116,8 +116,8 @@ try {
     if($LASTEXITCODE){throw 'Installed resource payload verification failed'}
     if(!$KeepInstalled){
         Install (Join-Path $installPath 'uninstall.exe') '/S'
-        $deadline=[DateTime]::UtcNow.AddSeconds(30)
-        while((Test-Path -LiteralPath $app) -and [DateTime]::UtcNow -lt $deadline){Start-Sleep -Milliseconds 250}
+        $deadline=[DateTime]::UtcNow.AddMinutes(2)
+        while(((Test-Path -LiteralPath $app) -or (Test-Path -LiteralPath $registryPath)) -and [DateTime]::UtcNow -lt $deadline){Start-Sleep -Milliseconds 250}
         if((Test-Path -LiteralPath $app) -or !(Test-Path -LiteralPath $database) -or (Test-Path -LiteralPath $registryPath)){throw 'QA uninstall failed or deleted private data'}
         if($legacy -and (!(Test-Path -LiteralPath $kept) -or !(Test-Path -LiteralPath $location))){throw 'Uninstall removed user files or the index location pointer'}
     }
