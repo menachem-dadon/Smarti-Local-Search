@@ -14,13 +14,15 @@ def sha(path):
 
 def source_hashes():
     result = {'smarti-local-search.exe': sha(ROOT / 'target/release/smarti-local-search.exe')}
-    for file in sorted((ROOT / 'resources').rglob('*')):
-        if file.is_file():
-            result['resources/' + file.relative_to(ROOT / 'resources').as_posix()] = sha(file)
     config = json.loads((ROOT / 'desktop/src-tauri/tauri.conf.json').read_text(encoding='utf-8'))
     for source, destination in config['bundle']['resources'].items():
-        if destination.endswith('.dll'):
-            result[destination] = sha(ROOT / 'desktop/src-tauri' / source)
+        source = (ROOT / 'desktop/src-tauri' / source).resolve()
+        if source.is_dir():
+            for file in sorted(source.rglob('*')):
+                if file.is_file():
+                    result[destination.rstrip('/') + '/' + file.relative_to(source).as_posix()] = sha(file)
+        else:
+            result[destination] = sha(source)
     return result
 
 

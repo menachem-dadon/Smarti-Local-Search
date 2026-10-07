@@ -58,3 +58,8 @@ Final verification imports installed-test results only when the executable and
 all recorded resource hashes still match. This does not install over the personal
 product identity. Generated Office fixture and native-manifest changes already
 present in a developer checkout can be preserved separately from a code commit.
+
+Runtime mappings are explicit and do not overlap: model/host/FFmpeg/licenses
+remain under resources, while every VC runtime DLL has one destination next to
+the main executable. This prevents directory/file mappings from competing for
+the same native source file during bundling.
