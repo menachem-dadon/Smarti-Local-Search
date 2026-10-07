@@ -194,9 +194,10 @@ fn dispatch(
                 .call("benchmark", serde_json::json!({}), 2)?
                 .data;
             let key = format!(
-                "{}:{}:0.1.0",
+                "{}:{}:{}",
                 e.settings()?.fingerprint(),
-                Engine::hardware()["fingerprint"]
+                Engine::hardware()["fingerprint"],
+                env!("CARGO_PKG_VERSION")
             );
             e.store.lock().unwrap().db.execute(
                 "INSERT OR REPLACE INTO benchmark(fingerprint,result,measured) VALUES(?1,?2,?3)",
@@ -318,7 +319,7 @@ fn dispatch(
             let path = args["path"]
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Export path required"))?;
-            let report = serde_json::json!({"version":"0.1.0","hardware":Engine::hardware(),"health":e.health()?,"activity":e.store.lock().unwrap().activity()?,"model":serde_json::from_slice::<serde_json::Value>(&std::fs::read(e.resources.join("models/model-manifest.json"))?)?});
+            let report = serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"hardware":Engine::hardware(),"health":e.health()?,"activity":e.store.lock().unwrap().activity()?,"model":serde_json::from_slice::<serde_json::Value>(&std::fs::read(e.resources.join("models/model-manifest.json"))?)?});
             std::fs::write(path, serde_json::to_vec_pretty(&report)?)?;
             serde_json::Value::Null
         }
@@ -415,14 +416,27 @@ fn input_from_args(args: Vec<String>) -> serde_json::Value {
     serde_json::Value::Null
 }
 fn main() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+    let isolated_smoke = std::env::args()
+        .any(|arg| arg.starts_with("--smoke-test=") || arg.starts_with("--upgrade-probe="));
+    assert!(
+        !isolated_smoke || std::env::var_os("SMARTI_SEARCH_DATA_DIR").is_some(),
+        "Native validation requires a private SMARTI_SEARCH_DATA_DIR"
+    );
+    let mut builder = tauri::Builder::default();
+    if !isolated_smoke {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             external_args(app, args)
-        }))
+        }));
+        builder = builder.plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&["quick"])
+                .build(),
+        );
+    }
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_window_state::Builder::default().with_denylist(&["quick"]).build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -432,7 +446,7 @@ fn main() {
                 })
                 .build(),
         )
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.handle().clone();
             let default_base = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default())
                 .join("Smarti Local Search");
@@ -442,8 +456,11 @@ fn main() {
                 .and_then(|v| v["path"].as_str().map(PathBuf::from));
             let base = std::env::var_os("SMARTI_SEARCH_DATA_DIR")
                 .map(PathBuf::from)
-                .or(relocated)
-                .unwrap_or(default_base);
+                .or(relocated.clone())
+                .unwrap_or_else(|| default_base.clone());
+            if isolated_smoke && (base == default_base || relocated.as_ref() == Some(&base)) {
+                return Err(anyhow::anyhow!("Native validation must not use the personal index location").into());
+            }
             let resources = if cfg!(debug_assertions) {
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../resources")
             } else {
@@ -464,7 +481,18 @@ fn main() {
                     }
                 }),
             )?;
-            let settings = engine.settings()?;
+            let mut settings = engine.settings()?;
+            if isolated_smoke && !settings.onboarded {
+                settings.shortcut = "Ctrl+Alt+Shift+F11".into();
+                engine.store.lock().unwrap().save_settings(&settings)?;
+            }
+            if !isolated_smoke {
+                // The previous uninstaller may remove Explorer/autostart keys;
+                // restore them from the preserved settings at the new location.
+                if let Err(error) = windows_integration::configure(settings.autostart, settings.explorer_menu, &settings.language) {
+                    engine.store.lock().unwrap().log("error", None, "", &format!("Windows integration unavailable: {error}"))?;
+                }
+            }
             fit_main_window(&handle)?;
             if let Err(error) = set_shortcut(&handle, &settings) {
                 engine.store.lock().unwrap().log(
@@ -479,6 +507,9 @@ fn main() {
             if let Some(report)=arguments.iter().find_map(|value|value.strip_prefix("--smoke-test=")) {
                 let corpus=arguments.iter().find_map(|value|value.strip_prefix("--smoke-root=")).ok_or_else(||anyhow::anyhow!("--smoke-root is required"))?;
                 smoke::start(handle.clone(),engine.clone(),PathBuf::from(report),PathBuf::from(corpus));
+            }
+            if let Some(report)=arguments.iter().find_map(|value|value.strip_prefix("--upgrade-probe=")) {
+                smoke::upgrade_probe(engine.clone(),PathBuf::from(report));
             }
             let quick = MenuItem::with_id(app, "quick", "Quick Search", true, None::<&str>)?;
             let main = MenuItem::with_id(app, "main", "Smarti Local Search", true, None::<&str>)?;

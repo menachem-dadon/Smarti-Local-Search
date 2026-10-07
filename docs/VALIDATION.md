@@ -44,3 +44,33 @@ These synthetic vectors isolate index costs. Product vectors are real model embe
 The Windows computer-use helper initially timed out. After work resumed it recovered, but the desktop was locked; UI input stopped and an unlock request was sent. No substitute screenshots or claimed visual approval were fabricated. Physical RTL/LTR, light/dark/system, 100/125/150/200% DPI, maximized/narrow windows, screen-reader behavior, actual global key presses, tray clicks and Explorer invocation still require manual acceptance. Native window visibility and shortcut registration are narrower automated checks.
 
 A clean Windows VM, older CPU compatibility, successful accelerated drivers and code signing/SmartScreen reputation have not been certified. This installer is unsigned. Restart behavior, journal fallback and memory/scheduler tradeoffs are described in `DECISIONS.md`.
+
+## Indexing and settings source update, 2026-10-07
+
+This update follows the installer snapshot described above. It fixes identity
+lookups, dispatch priority and idle reconciliation, adds general exclusions and
+measured time estimates, and updates search focus, settings autosave and native
+path chooser integration. The existing installer/installed application has not
+been replaced by this source work.
+
+Core unit/integration checks cover path boundaries and UNC matching, conservative
+backup exclusions, queue index plans, migration of the legacy two-column queue
+without losing jobs, one-time default migration with custom settings retained,
+estimate sampling, and a 2,000-file metadata workload including rescans, stopped
+work and exclusion removal without deleting originals. The real bundled-model
+integration test covers content/filename/image searches, file edits and renames,
+restart, semantic configuration rollback and re-indexing. All use temporary data.
+
+Frontend: 21 tests pass, covering debounced autosave, invalid drafts, in-flight
+edits plus settings events, leaving Settings before the debounce, persistence
+failures, semantic rebuild confirmation/cancellation, path chooser responses and
+time estimate states. TypeScript, production frontend build, Rust workspace
+Clippy and the Tauri window unit test pass.
+
+`scripts/verify-indexing-ui.cjs` checks the actual React interface in installed
+Edge with an in-memory native IPC adapter. It verifies RTL input/placeholder
+alignment, no inner focus outline with the outer focus indicator retained,
+discovery progress and estimate text, automatic saving of selected full paths,
+and no horizontal overflow at 760 px. Screenshots and measured styles are under
+`artifacts/indexing-ui/`. This is browser rendering evidence; the Windows picker
+itself and a rebuilt installed application have not been exercised for this update.

@@ -31,6 +31,8 @@ pub struct Response {
 }
 struct Process {
     child: Child,
+    #[cfg(windows)]
+    _job: std::os::windows::io::OwnedHandle,
     input: ChildStdin,
     output: ChildStdout,
     id: u64,
@@ -73,10 +75,21 @@ impl Process {
         let mut child = command
             .spawn()
             .context("Starting bundled inference worker")?;
+        #[cfg(windows)]
+        let job = match crate::platform::contain_child(&child) {
+            Ok(job) => job,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error.context("Containing inference worker"));
+            }
+        };
         Ok(Self {
             input: child.stdin.take().unwrap(),
             output: child.stdout.take().unwrap(),
             child,
+            #[cfg(windows)]
+            _job: job,
             id: 0,
         })
     }

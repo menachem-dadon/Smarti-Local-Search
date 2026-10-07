@@ -19,6 +19,9 @@ if(!$SkipTests){& $PSScriptRoot/test.ps1}
 if($LASTEXITCODE){throw 'Inference host packaging failed'}
 $source=Join-Path $taskRoot 'artifacts/sidecar-dist/smarti-local-search-inference'
 $destination=Join-Path $taskRoot 'resources/inference'
+$destination=[IO.Path]::GetFullPath($destination)
+if($destination -ne [IO.Path]::GetFullPath((Join-Path $taskRoot 'resources/inference'))){throw 'Unsafe bundled runtime directory'}
+if(Test-Path -LiteralPath $destination){Remove-Item -LiteralPath $destination -Recurse -Force}
 New-Item -ItemType Directory -Force -Path $destination | Out-Null
 Get-ChildItem -LiteralPath $source | ForEach-Object {Copy-Item -LiteralPath $_.FullName -Destination $destination -Recurse -Force}
 & $python scripts/verify_resources.py

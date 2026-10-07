@@ -1,4 +1,6 @@
 export const en={
+ excludeFolder:'Exclude folder',excludeFile:'Exclude file',exclusionHint:'One folder name, pattern, or full path per line. Folder paths exclude their contents. Changes are saved automatically.',invalidSetting:'Enter a value within the allowed range.',
+ discoveryRemaining:'File discovery: estimated time remaining',indexRemaining:'Content indexing: estimated time remaining',estimating:'Estimating…',afterDiscovery:'Estimate available after discovery',estimatePaused:'Available when indexing resumes',complete:'Complete',estimateProvisional:'Initial estimate. It will adjust as each file type is processed.',estimateHint:'Estimate based on measured speed; file sizes and media can change it.',
  moveIndex:'Move index storage',moveExplain:'Indexing will stop. The validated index will be copied to the selected folder, and the app will restart. The original copy is retained.',
  search:'Search',index:'Index',locations:'Locations',activity:'Activity',settings:'Settings',
  placeholder:'Search all your files…',empty:'Find it by meaning, name, content or image',emptyHint:'Ctrl+K to search · Ctrl+Alt+Space for Quick Search',noResults:'No matching files',noResultsHint:'Try different words or remove a filter.',

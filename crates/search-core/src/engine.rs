@@ -1,6 +1,8 @@
 use crate::{
+    exclusions::Exclusions,
     extract,
     inference::Inference,
+    progress::Progress,
     query,
     store::{Store, now},
     types::*,
@@ -39,12 +41,23 @@ pub struct Engine {
     configuration: RwLock<()>,
     last_emit: Mutex<Instant>,
     changes: Mutex<HashMap<PathBuf, Instant>>,
+    progress: Mutex<Progress>,
 }
 impl Engine {
     pub fn open(data: PathBuf, resources: PathBuf, events: EventSink) -> Result<Arc<Self>> {
         std::fs::create_dir_all(data.join("cache"))?;
         let store = Store::open(&data.join("data/metadata.sqlite"))?;
         let settings = store.settings()?;
+        let stopped = store
+            .db
+            .query_row(
+                "SELECT value FROM settings WHERE key='index_stopped'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+            .as_deref()
+            == Some("1");
         let mut vectors = Vectors::new(settings.dimensions)?;
         let vector_signature: String = store.db.query_row(
             "SELECT count(*) || ':' || coalesce(max(id),0) FROM chunks WHERE vector IS NOT NULL",
@@ -102,7 +115,7 @@ impl Engine {
                 ..Default::default()
             }),
             paused: AtomicBool::new(false),
-            stopped: AtomicBool::new(false),
+            stopped: AtomicBool::new(stopped),
             running: AtomicBool::new(false),
             latest_query: AtomicU64::new(0),
             scan: Mutex::new(Vec::new()),
@@ -112,10 +125,24 @@ impl Engine {
             configuration: RwLock::new(()),
             last_emit: Mutex::new(Instant::now() - Duration::from_secs(1)),
             changes: Mutex::new(HashMap::new()),
+            progress: Mutex::new(Progress::default()),
         });
         engine.watch()?;
         // Reconcile changes made while the app was closed. Unchanged readable
         // NTFS journals skip enumeration; other volumes use metadata-only scans.
+        let exclusions_changed = engine
+            .store
+            .lock()
+            .unwrap()
+            .db
+            .query_row(
+                "SELECT value FROM settings WHERE key='exclusions_rescan_required'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+            .as_deref()
+            == Some("1");
         for root in engine.roots()? {
             let journal = crate::platform::journal_checkpoint(Path::new(&root.path));
             let saved = engine
@@ -129,17 +156,17 @@ impl Engine {
                     |r| r.get::<_, String>(0),
                 )
                 .ok();
-            if journal.is_none() || journal != saved {
+            if exclusions_changed || journal.is_none() || journal != saved {
                 engine.scan.lock().unwrap().push(root.id);
             }
         }
+        engine.status.lock().unwrap().discovery_complete = engine.scan.lock().unwrap().is_empty();
         let weak = Arc::downgrade(&engine);
         thread::spawn(move || {
             let mut was_ready = false;
             let mut previous_health = serde_json::Value::Null;
             let mut last_reconcile = Instant::now();
             loop {
-                thread::sleep(Duration::from_millis(250));
                 let Some(e) = weak.upgrade() else { break };
                 let ready = e.inference.ready();
                 let health = e.inference.health.lock().unwrap().clone();
@@ -167,39 +194,61 @@ impl Engine {
                     let _ = e.changed(&path);
                 }
                 if e.paused.load(Ordering::Relaxed) || e.stopped.load(Ordering::Relaxed) {
+                    thread::sleep(Duration::from_millis(250));
                     continue;
-                }
-                if last_reconcile.elapsed() > Duration::from_secs(300) {
-                    if let Ok(roots) = e.roots() {
-                        let mut scan = e.scan.lock().unwrap();
-                        for root in roots {
-                            if !scan.contains(&root.id) {
-                                scan.push(root.id)
-                            }
-                        }
-                    }
-                    last_reconcile = Instant::now();
                 }
                 let scans = std::mem::take(&mut *e.scan.lock().unwrap());
                 if !scans.is_empty() {
                     e.running.store(true, Ordering::Relaxed);
-                    for id in scans {
-                        if let Err(err) = e.discover(id) {
+                    if let Err(err) = e.count_discovery(&scans) {
+                        let _ = e
+                            .store
+                            .lock()
+                            .unwrap()
+                            .log("error", None, "", &err.to_string());
+                    }
+                    for (position, id) in scans.iter().enumerate() {
+                        if e.stopped.load(Ordering::Relaxed) {
+                            e.scan.lock().unwrap().extend_from_slice(&scans[position..]);
+                            break;
+                        }
+                        if let Err(err) = e.discover(*id) {
                             let _ =
                                 e.store
                                     .lock()
                                     .unwrap()
                                     .log("error", None, "", &err.to_string());
                         }
+                        if e.stopped.load(Ordering::Relaxed) {
+                            e.scan.lock().unwrap().extend_from_slice(&scans[position..]);
+                            break;
+                        }
                     }
+                    last_reconcile = Instant::now();
+                    let mut status = e.status.lock().unwrap();
+                    status.discovery_counting = false;
+                    status.discovery_complete = !e.stopped.load(Ordering::Relaxed);
+                    drop(status);
+                    if !e.stopped.load(Ordering::Relaxed) {
+                        let _ = e.store.lock().unwrap().db.execute(
+                            "DELETE FROM settings WHERE key='exclusions_rescan_required'",
+                            [],
+                        );
+                    }
+                    e.emit_status();
+                }
+                if e.stopped.load(Ordering::Relaxed) {
+                    continue;
                 }
                 let job = {
                     let s = e.store.lock().unwrap();
                     let media_paused = s.settings().is_ok_and(|settings| settings.pause_on_battery)
                         && crate::platform::power_constrained();
-                    s.db.query_row("SELECT f.id FROM jobs j JOIN files f ON f.id=j.file_id WHERE j.state='queued' AND f.online=1 AND (?1=0 OR f.kind NOT IN ('image','audio','video')) ORDER BY CASE f.kind WHEN 'text' THEN 0 WHEN 'code' THEN 1 WHEN 'document' THEN 2 WHEN 'pdf' THEN 2 WHEN 'image' THEN 3 WHEN 'audio' THEN 4 ELSE 5 END,f.id LIMIT 1",[media_paused],|r|r.get::<_,i64>(0)).ok()
+                    s.db.query_row("SELECT f.id,f.kind FROM jobs j INDEXED BY jobs_dispatch JOIN files f ON f.id=j.file_id WHERE j.state='queued' AND f.online=1 AND (?1=0 OR f.kind NOT IN ('image','audio','video')) ORDER BY j.priority,j.file_id LIMIT 1",[media_paused],|r|Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?))).ok()
                 };
-                if let Some(id) = job {
+                if let Some((id, kind)) = job {
+                    let started = Instant::now();
+                    let paused_before = e.progress.lock().unwrap().paused_seconds();
                     e.running.store(true, Ordering::Relaxed);
                     if let Err(err) = e.index_file(id) {
                         let s = e.store.lock().unwrap();
@@ -211,26 +260,65 @@ impl Engine {
                         let path = s.file(id).map(|f| f.path).unwrap_or_default();
                         let _ = s.log("error", Some(id), &path, &err.to_string());
                     }
-                    e.emit_status();
-                } else if e.running.swap(false, Ordering::Relaxed) {
-                    let _ = e.save_vectors();
-                    let pending = e
-                        .store
-                        .lock()
-                        .unwrap()
-                        .db
-                        .query_row("SELECT count(*) FROM jobs", [], |r| r.get::<_, i64>(0))
-                        .unwrap_or(0);
-                    e.status.lock().unwrap().stage = if pending == 0 {
-                        "ready"
-                    } else {
-                        "battery_paused"
+                    if !e.stopped.load(Ordering::Relaxed) && !e.paused.load(Ordering::Relaxed) {
+                        let mut progress = e.progress.lock().unwrap();
+                        let seconds = (started.elapsed().as_secs_f64()
+                            - (progress.paused_seconds() - paused_before))
+                            .max(0.);
+                        progress.record(&kind, seconds);
                     }
-                    .into();
                     e.emit_status();
-                    if pending == 0 {
-                        (e.events)("index-complete", serde_json::json!({"time":now()}));
+                } else {
+                    if e.running.swap(false, Ordering::Relaxed) {
+                        let _ = e.save_vectors();
+                        let pending = e
+                            .store
+                            .lock()
+                            .unwrap()
+                            .db
+                            .query_row("SELECT count(*) FROM jobs", [], |r| r.get::<_, i64>(0))
+                            .unwrap_or(0);
+                        e.status.lock().unwrap().stage = if pending == 0 {
+                            "ready"
+                        } else {
+                            "battery_paused"
+                        }
+                        .into();
+                        e.emit_status();
+                        if pending == 0 {
+                            (e.events)("index-complete", serde_json::json!({"time":now()}));
+                        }
                     }
+                    // Reconciliation runs only while the processing queue is idle,
+                    // and the timer starts after a completed scan, preventing an
+                    // hours-long scan from immediately scheduling another one.
+                    if last_reconcile.elapsed() > Duration::from_secs(300) {
+                        if let Ok(roots) = e.roots() {
+                            let mut scan = e.scan.lock().unwrap();
+                            for root in roots {
+                                let journal =
+                                    crate::platform::journal_checkpoint(Path::new(&root.path));
+                                let saved = e
+                                    .store
+                                    .lock()
+                                    .unwrap()
+                                    .db
+                                    .query_row(
+                                        "SELECT value FROM settings WHERE key=?1",
+                                        [format!("journal:{}", root.id)],
+                                        |r| r.get::<_, String>(0),
+                                    )
+                                    .ok();
+                                if (journal.is_none() || journal != saved)
+                                    && !scan.contains(&root.id)
+                                {
+                                    scan.push(root.id);
+                                }
+                            }
+                        }
+                        last_reconcile = Instant::now();
+                    }
+                    thread::sleep(Duration::from_millis(250));
                 }
             }
         });
@@ -353,29 +441,53 @@ impl Engine {
             "UPDATE roots SET exclusions=?2 WHERE id=?1",
             params![id, serde_json::to_string(&exclusions)?],
         )?;
+        self.queue_scan([id]);
         Ok(())
+    }
+    fn queue_scan(&self, ids: impl IntoIterator<Item = i64>) {
+        let mut scan = self.scan.lock().unwrap();
+        for id in ids {
+            if !scan.contains(&id) {
+                scan.push(id);
+            }
+        }
+        self.status.lock().unwrap().discovery_complete = false;
     }
     pub fn start_index(&self, root: Option<i64>) -> Result<()> {
         self.running.store(true, Ordering::Relaxed);
         self.stopped.store(false, Ordering::Relaxed);
         self.paused.store(false, Ordering::Relaxed);
+        self.progress.lock().unwrap().set_paused(false);
         let ids = if let Some(id) = root {
             vec![id]
         } else {
             self.roots()?.iter().map(|r| r.id).collect()
         };
-        self.scan.lock().unwrap().extend(ids);
+        self.store.lock().unwrap().db.execute(
+            "INSERT OR REPLACE INTO settings VALUES('index_stopped','0')",
+            [],
+        )?;
+        self.queue_scan(ids);
         self.emit_status();
         Ok(())
     }
     pub fn control(&self, action: &str) -> Result<()> {
+        self.progress.lock().unwrap().set_paused(action == "pause");
         match action {
             "pause" => self.paused.store(true, Ordering::Relaxed),
             "resume" => {
+                self.store.lock().unwrap().db.execute(
+                    "INSERT OR REPLACE INTO settings VALUES('index_stopped','0')",
+                    [],
+                )?;
                 self.stopped.store(false, Ordering::Relaxed);
                 self.paused.store(false, Ordering::Relaxed)
             }
             "stop" => {
+                self.store.lock().unwrap().db.execute(
+                    "INSERT OR REPLACE INTO settings VALUES('index_stopped','1')",
+                    [],
+                )?;
                 self.stopped.store(true, Ordering::Relaxed);
                 self.running.store(false, Ordering::Relaxed)
             }
@@ -468,6 +580,14 @@ impl Engine {
         }
         if changed {
             self.stopped.store(false, Ordering::Relaxed);
+            self.store.lock().unwrap().db.execute(
+                "INSERT OR REPLACE INTO settings VALUES('index_stopped','0')",
+                [],
+            )?;
+        }
+        if old.exclusions != settings.exclusions || old.sensitive_files != settings.sensitive_files
+        {
+            self.queue_scan(self.roots()?.iter().map(|r| r.id));
         }
         self.emit_status();
         (self.events)("settings-changed", serde_json::to_value(&settings)?);
@@ -480,31 +600,47 @@ impl Engine {
         !self.stopped.load(Ordering::Relaxed)
     }
     fn excluded(path: &Path, root: &Path, settings: &Settings, extra: &[String]) -> bool {
-        if !settings.sensitive_files && extract::sensitive(path) {
-            return true;
+        Exclusions::new(settings, extra).matches(path, root)
+    }
+    fn count_discovery(&self, ids: &[i64]) -> Result<()> {
+        self.progress.lock().unwrap().reset_discovery();
+        {
+            let mut status = self.status.lock().unwrap();
+            status.stage = "discovery".into();
+            status.discovery_counting = true;
+            status.discovery_complete = false;
         }
-        let relative = path
-            .strip_prefix(root)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .replace('\\', "/")
-            .to_lowercase();
-        settings.exclusions.iter().chain(extra).any(|x| {
-            let x = x.to_lowercase().replace('\\', "/");
-            if x.contains(['*', '?', '[']) {
-                return glob::Pattern::new(&x).is_ok_and(|pattern| {
-                    pattern.matches(&relative)
-                        || path.file_name().is_some_and(|name| {
-                            pattern.matches(&name.to_string_lossy().to_lowercase())
-                        })
-                });
+        self.emit_status();
+        let settings = self.settings()?;
+        for root in self.roots()?.into_iter().filter(|r| ids.contains(&r.id)) {
+            let path = Path::new(&root.path);
+            if !path.exists() {
+                continue;
             }
-            !x.is_empty()
-                && (relative == x
-                    || relative.starts_with(&format!("{x}/"))
-                    || relative.contains(&format!("/{x}/"))
-                    || relative.ends_with(&format!("/{x}")))
-        })
+            let rules = Exclusions::new(&settings, &root.exclusions);
+            for entry in walkdir::WalkDir::new(path)
+                .follow_links(false)
+                .into_iter()
+                .filter_entry(|e| {
+                    !rules.matches(e.path(), path)
+                        && !e.path().starts_with(&self.data)
+                        && !e.path().starts_with(&self.resources)
+                })
+            {
+                if !self.checkpoint() {
+                    return Ok(());
+                }
+                if let Ok(entry) = entry
+                    && entry.file_type().is_file()
+                {
+                    self.progress.lock().unwrap().discovery_total += 1;
+                }
+            }
+        }
+        self.status.lock().unwrap().discovery_counting = false;
+        self.progress.lock().unwrap().start_discovery();
+        self.emit_status();
+        Ok(())
     }
     fn discover(&self, id: i64) -> Result<()> {
         let _work = self.work.lock().unwrap();
@@ -532,13 +668,51 @@ impl Engine {
         self.status.lock().unwrap().stage = "discovery".into();
         let settings = self.settings()?;
         let seen = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
-        let started = Instant::now();
         let journal = crate::platform::journal_checkpoint(&path);
         let mut count = 0;
+        let rules = Exclusions::new(&settings, &root.exclusions);
+        // Explicit exclusions also remove old index entries when another part
+        // of this location is unreadable; an incomplete scan only protects
+        // otherwise included files from being mistaken for deleted files.
+        let removed = {
+            let s = self.store.lock().unwrap();
+            let files =
+                s.db.prepare("SELECT id,path FROM files WHERE root_id=?1")?
+                    .query_map([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+            let tx = s.db.unchecked_transaction()?;
+            let mut chunks = Vec::new();
+            for (file, filename) in files {
+                let filename = Path::new(&filename);
+                if rules.matches(filename, &path)
+                    || filename.starts_with(&self.data)
+                    || filename.starts_with(&self.resources)
+                {
+                    chunks.extend(
+                        s.db.prepare("SELECT id FROM chunks WHERE file_id=?1")?
+                            .query_map([file], |r| r.get::<_, u64>(0))?
+                            .collect::<rusqlite::Result<Vec<_>>>()?,
+                    );
+                    s.db.execute("DELETE FROM files WHERE id=?1", [file])?;
+                }
+            }
+            tx.commit()?;
+            chunks
+        };
+        {
+            let vectors = self.vectors.lock().unwrap();
+            for id in removed {
+                vectors.remove(id)?;
+            }
+        }
         let walker = walkdir::WalkDir::new(&path)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|e| !Self::excluded(e.path(), &path, &settings, &root.exclusions));
+            .filter_entry(|e| {
+                !rules.matches(e.path(), &path)
+                    && !e.path().starts_with(&self.data)
+                    && !e.path().starts_with(&self.resources)
+            });
         let mut errors = 0;
         for entry in walker {
             if !self.checkpoint() {
@@ -566,12 +740,24 @@ impl Engine {
             {
                 continue;
             }
-            self.upsert_file(id, entry.path(), seen)?;
+            if let Err(error) = self.upsert_file(id, entry.path(), seen) {
+                errors += 1;
+                let _ = self.store.lock().unwrap().log(
+                    "skipped",
+                    None,
+                    &display_path(entry.path()),
+                    &error.to_string(),
+                );
+                continue;
+            }
+            {
+                let mut progress = self.progress.lock().unwrap();
+                progress.discovered_file();
+            }
             count += 1;
             if count % 128 == 0 {
                 let mut status = self.status.lock().unwrap();
                 status.discovered = count;
-                status.files_per_second = count as f64 / started.elapsed().as_secs_f64();
                 drop(status);
                 self.emit_status();
             }
@@ -644,42 +830,66 @@ impl Engine {
             .and_then(|d| d.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        let stable = crate::file_identity::stable(path).unwrap_or_else(|| path_text.clone());
         let s = self.store.lock().unwrap();
-        let renamed =
+        let tx = s.db.unchecked_transaction()?;
+        let mut old =
             s.db.query_row(
-                "SELECT id FROM files WHERE stable_id=?1 AND root_id=?2",
-                params![stable, root],
-                |r| r.get::<_, i64>(0),
-            )
-            .ok();
-        if let Some(id) = renamed {
-            s.db.execute(
-                "UPDATE files SET path=?2,name=?3,content_hash=CASE WHEN kind<>?4 THEN NULL ELSE content_hash END,semantic=CASE WHEN kind<>?4 THEN 0 ELSE semantic END,mtime_ns=CASE WHEN kind<>?4 THEN 0 ELSE mtime_ns END WHERE id=?1",
-                params![id, path_text, name,kind],
-            )?;
-        }
-        let old =
-            s.db.query_row(
-                "SELECT id,size,mtime_ns FROM files WHERE path=?1",
+                "SELECT id,size,mtime_ns,stable_id FROM files WHERE path=?1",
                 [&path_text],
                 |r| {
                     Ok((
                         r.get::<_, i64>(0)?,
                         r.get::<_, u64>(1)?,
                         r.get::<_, i64>(2)?,
+                        r.get::<_, Option<String>>(3)?,
                     ))
                 },
             )
             .ok();
-        s.db.execute("INSERT INTO files(root_id,path,name,extension,kind,size,modified,created,seen,stable_id,mtime_ns) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(path) DO UPDATE SET size=excluded.size,modified=excluded.modified,mtime_ns=excluded.mtime_ns,extension=excluded.extension,kind=excluded.kind,seen=excluded.seen,online=1",params![root,path_text,name,extension,kind,size,modified,created,seen,stable,mtime_ns])?;
-        let id = old.map(|x| x.0).unwrap_or_else(|| s.db.last_insert_rowid());
-        if old.is_none_or(|(_, old_size, old_time)| old_size != size || old_time != mtime_ns) {
+        // A known path needs no native handle or identity lookup. New paths
+        // still use the stable NTFS identity to preserve rename semantics.
+        let stable = old
+            .as_ref()
+            .filter(|v| v.1 == size && v.2 == mtime_ns)
+            .and_then(|v| v.3.clone())
+            .unwrap_or_else(|| {
+                crate::file_identity::stable(path).unwrap_or_else(|| path_text.clone())
+            });
+        let renamed = if old.is_none() {
+            s.db.query_row(
+                "SELECT id FROM files WHERE stable_id=?1 AND root_id=?2",
+                params![stable, root],
+                |r| r.get::<_, i64>(0),
+            )
+            .ok()
+        } else {
+            None
+        };
+        if let Some(id) = renamed {
+            s.db.execute(
+                "UPDATE files SET path=?2,name=?3,content_hash=CASE WHEN kind<>?4 THEN NULL ELSE content_hash END,semantic=CASE WHEN kind<>?4 THEN 0 ELSE semantic END,mtime_ns=CASE WHEN kind<>?4 THEN 0 ELSE mtime_ns END WHERE id=?1",
+                params![id, path_text, name,kind],
+            )?;
+            old =
+                s.db.query_row(
+                    "SELECT id,size,mtime_ns,stable_id FROM files WHERE id=?1",
+                    [id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .ok();
+        }
+        s.db.execute("INSERT INTO files(root_id,path,name,extension,kind,size,modified,created,seen,stable_id,mtime_ns) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(path) DO UPDATE SET size=excluded.size,modified=excluded.modified,mtime_ns=excluded.mtime_ns,stable_id=excluded.stable_id,extension=excluded.extension,kind=excluded.kind,seen=excluded.seen,online=1",params![root,path_text,name,extension,kind,size,modified,created,seen,stable,mtime_ns])?;
+        let id = old
+            .as_ref()
+            .map(|x| x.0)
+            .unwrap_or_else(|| s.db.last_insert_rowid());
+        if old.is_none_or(|(_, old_size, old_time, _)| old_size != size || old_time != mtime_ns) {
             s.db.execute(
                 "INSERT OR REPLACE INTO jobs(file_id,state) VALUES(?1,'queued')",
                 [id],
             )?;
         }
+        tx.commit()?;
         Ok(())
     }
     fn index_file(&self, id: i64) -> Result<()> {
@@ -691,6 +901,29 @@ impl Engine {
             s.file(id)?
         };
         let path = PathBuf::from(&file.path);
+        let root: (String, String) = self.store.lock().unwrap().db.query_row(
+            "SELECT path,exclusions FROM roots WHERE id=?1",
+            [file.root_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let root_exclusions: Vec<String> = serde_json::from_str(&root.1)?;
+        if Self::excluded(&path, Path::new(&root.0), &settings, &root_exclusions) {
+            // A newly excluded queued file must never reach content extraction.
+            let ids = {
+                let s = self.store.lock().unwrap();
+                let ids =
+                    s.db.prepare("SELECT id FROM chunks WHERE file_id=?1")?
+                        .query_map([id], |r| r.get::<_, u64>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                s.db.execute("DELETE FROM files WHERE id=?1", [id])?;
+                ids
+            };
+            let vectors = self.vectors.lock().unwrap();
+            for id in ids {
+                vectors.remove(id)?;
+            }
+            return Ok(());
+        }
         let enabled = match file.kind.as_str() {
             "text" => settings.text,
             "code" => settings.code,
@@ -1017,6 +1250,30 @@ impl Engine {
         )?;
         status.pending =
             s.db.query_row("SELECT count(*) FROM jobs", [], |r| r.get(0))?;
+        let progress = self.progress.lock().unwrap();
+        status.discovery_total = progress.discovery_total;
+        status.discovery_processed = progress.discovery_done;
+        if progress.discovery_seconds > 0. {
+            status.files_per_second = progress.discovery_done as f64 / progress.discovery_seconds;
+        }
+        status.discovery_eta_seconds = if status.discovery_complete {
+            Some(0.)
+        } else if status.discovery_counting {
+            None
+        } else {
+            progress.discovery_eta()
+        };
+        let pending = s.db.prepare("SELECT f.kind,count(*) FROM jobs j JOIN files f ON f.id=j.file_id WHERE f.online=1 GROUP BY f.kind")?
+            .query_map([], |r| Ok((r.get::<_,String>(0)?,r.get::<_,u64>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let (eta, provisional) = progress.index_eta(&pending);
+        status.index_eta_seconds = eta;
+        status.index_eta_provisional = provisional;
+        drop(progress);
+        if !self.running.load(Ordering::Relaxed) || self.paused.load(Ordering::Relaxed) {
+            status.discovery_eta_seconds = None;
+            status.index_eta_seconds = None;
+        }
         status.bytes = [
             "data/metadata.sqlite",
             "data/metadata.sqlite-wal",

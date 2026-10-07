@@ -9,6 +9,15 @@ use std::{
 use tauri::Manager;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
+pub fn upgrade_probe(engine: Arc<Engine>, report: PathBuf) {
+    std::thread::spawn(move || {
+        let result = wait(&engine, |s| s.inference["ready"] == true);
+        let payload = serde_json::json!({"passed":result.is_ok(),"version":env!("CARGO_PKG_VERSION"),"executable":std::env::current_exe().ok(),"data":engine.data});
+        let _ = std::fs::write(report, serde_json::to_vec_pretty(&payload).unwrap());
+        // Stay alive until the installer closes the application and its job.
+    });
+}
+
 pub fn start(app: tauri::AppHandle, engine: Arc<Engine>, report: PathBuf, corpus: PathBuf) {
     std::thread::spawn(move || {
         let started = Instant::now();
@@ -60,7 +69,13 @@ fn run(
     settings.notifications = false;
     settings.minimize_to_tray = false;
     engine.update_settings(settings, false)?;
-    engine.add_root(corpus)?;
+    let existing = engine
+        .roots()?
+        .iter()
+        .any(|root| std::fs::canonicalize(&root.path).ok() == std::fs::canonicalize(corpus).ok());
+    if !existing {
+        engine.add_root(corpus)?;
+    }
     engine.start_index(None)?;
     wait(engine, |s| s.files >= 11 && s.pending == 0 && !s.running)?;
     let status = engine.status()?;

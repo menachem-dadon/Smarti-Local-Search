@@ -45,7 +45,61 @@ impl Store {
                 [],
             )?;
         }
-        Ok(Self { db })
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS files_identity ON files(root_id,stable_id)",
+            [],
+        )?;
+        let job_columns: Vec<String> = db
+            .prepare("PRAGMA table_info(jobs)")?
+            .query_map([], |row| row.get(1))?
+            .collect::<rusqlite::Result<_>>()?;
+        if !job_columns.iter().any(|name| name == "priority") {
+            db.execute_batch("ALTER TABLE jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 5;
+                UPDATE jobs SET priority=(SELECT CASE kind WHEN 'text' THEN 0 WHEN 'code' THEN 1 WHEN 'document' THEN 2 WHEN 'pdf' THEN 2 WHEN 'image' THEN 3 WHEN 'audio' THEN 4 ELSE 5 END FROM files WHERE id=jobs.file_id);")?;
+        }
+        db.execute_batch("CREATE INDEX IF NOT EXISTS jobs_dispatch ON jobs(state,priority,file_id);
+            CREATE TRIGGER IF NOT EXISTS jobs_priority AFTER INSERT ON jobs BEGIN
+                UPDATE jobs SET priority=(SELECT CASE kind WHEN 'text' THEN 0 WHEN 'code' THEN 1 WHEN 'document' THEN 2 WHEN 'pdf' THEN 2 WHEN 'image' THEN 3 WHEN 'audio' THEN 4 ELSE 5 END FROM files WHERE id=new.file_id) WHERE file_id=new.file_id;
+            END;
+            CREATE TRIGGER IF NOT EXISTS files_job_priority AFTER UPDATE OF kind ON files WHEN old.kind<>new.kind BEGIN
+                UPDATE jobs SET priority=CASE new.kind WHEN 'text' THEN 0 WHEN 'code' THEN 1 WHEN 'document' THEN 2 WHEN 'pdf' THEN 2 WHEN 'image' THEN 3 WHEN 'audio' THEN 4 ELSE 5 END WHERE file_id=new.id;
+            END;")?;
+        let store = Self { db };
+        let migrated: bool = store.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM settings WHERE key='exclusions_v2')",
+            [],
+            |r| r.get(0),
+        )?;
+        if !migrated {
+            let tx = store.db.unchecked_transaction()?;
+            let has_app: bool = store.db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM settings WHERE key='app')",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_app {
+                let mut settings = store.settings()?;
+                for rule in crate::exclusions::ADDITIONAL_DEFAULTS {
+                    if !settings
+                        .exclusions
+                        .iter()
+                        .any(|s| s.eq_ignore_ascii_case(rule))
+                    {
+                        settings.exclusions.push((*rule).into());
+                    }
+                }
+                store.save_settings(&settings)?;
+                store.db.execute(
+                    "INSERT OR REPLACE INTO settings VALUES('exclusions_rescan_required','1')",
+                    [],
+                )?;
+            }
+            store
+                .db
+                .execute("INSERT INTO settings VALUES('exclusions_v2','1')", [])?;
+            tx.commit()?;
+        }
+        Ok(store)
     }
     pub fn settings(&self) -> Result<Settings> {
         let value = self

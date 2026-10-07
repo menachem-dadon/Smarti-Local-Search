@@ -91,6 +91,8 @@ impl Default for Settings {
                 ".idea",
             ]
             .iter()
+            .copied()
+            .chain(crate::exclusions::ADDITIONAL_DEFAULTS.iter().copied())
             .map(|s| s.to_string())
             .collect(),
             max_text_mb: 32,
@@ -272,6 +274,13 @@ pub struct IndexStatus {
     pub bytes: u64,
     pub files_per_second: f64,
     pub embeddings_per_second: f64,
+    pub discovery_total: u64,
+    pub discovery_processed: u64,
+    pub discovery_counting: bool,
+    pub discovery_complete: bool,
+    pub discovery_eta_seconds: Option<f64>,
+    pub index_eta_seconds: Option<f64>,
+    pub index_eta_provisional: bool,
     pub updated: i64,
     pub inference: serde_json::Value,
     pub watcher: String,

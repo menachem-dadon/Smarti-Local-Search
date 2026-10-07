@@ -1,6 +1,56 @@
 //! Native power policy and conservative NTFS journal checkpoints.
 //! Journal access may require extra Windows privileges; callers must reconcile
 //! metadata when access is denied, the journal wraps, or its identity changes.
+/// Windows closes this job handle even if the parent is force-terminated by an
+/// installer. Kill the worker (and its children) instead of leaving DLLs locked.
+#[cfg(windows)]
+pub fn contain_child(
+    child: &std::process::Child,
+) -> anyhow::Result<std::os::windows::io::OwnedHandle> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows::Win32::{
+        Foundation::HANDLE,
+        System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        },
+    };
+    unsafe {
+        let job = OwnedHandle::from_raw_handle(CreateJobObjectW(None, None)?.0);
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(
+            HANDLE(job.as_raw_handle()),
+            JobObjectExtendedLimitInformation,
+            (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            std::mem::size_of_val(&limits) as u32,
+        )?;
+        AssignProcessToJobObject(HANDLE(job.as_raw_handle()), HANDLE(child.as_raw_handle()))?;
+        Ok(job)
+    }
+}
+
+#[cfg(all(test, windows))]
+mod process_tests {
+    #[test]
+    fn closing_parent_job_terminates_its_worker() {
+        use std::{os::windows::process::CommandExt, process::Command, time::Instant};
+        let mut child = Command::new("cmd.exe")
+            .args(["/D", "/C", "ping -n 60 127.0.0.1 > nul"])
+            .creation_flags(0x08000000)
+            .spawn()
+            .unwrap();
+        let job = super::contain_child(&child).unwrap();
+        assert!(child.try_wait().unwrap().is_none());
+        drop(job);
+        let started = Instant::now();
+        while child.try_wait().unwrap().is_none() {
+            assert!(started.elapsed().as_secs() < 5);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+}
 #[cfg(windows)]
 pub fn power_constrained() -> bool {
     #[repr(C)]
