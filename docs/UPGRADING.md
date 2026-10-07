@@ -13,13 +13,18 @@ New installers reject silent installation over a higher installed version.
 Before replacement/uninstall, Windows Restart Manager closes the application
 and any bundled inference worker holding its executable open. Starting in 0.1.1,
 workers belong to a Windows job with kill-on-close, so forced application exit
-also terminates its worker tree. The install hook clears the managed
+also terminates its worker tree. The install hook checks fresh Restart Manager
+sessions: parent/job shutdown can
+report a failure even when both processes have exited. A remaining file user
+still blocks replacement. Tauri may create an empty directory requested with a
+conflicting `/D`; the application payload stays in its saved installation.
+The install hook clears the managed
 `resources/inference` runtime directory before copying the new payload, removing
 obsolete DLLs. Never store personal files inside the managed resources directory.
 
 Upgrades preserve `data`, `cache`, `location.json`, custom roots and settings.
 The SQLite migration adds indexed queue summaries and covering status indices,
-and merges new default exclusions once. It preserves custom exclusions and later user removals. A
+and merges new default exclusions once. It preserves custom exclusions and later user removals.
 0.1.2 moves legacy per-location exclusions into the global settings list, anchoring
 relative rules to their original location. That avoids broadening a formerly
 local rule to unrelated locations. All exclusions are edited in Settings >
@@ -63,3 +68,9 @@ Runtime mappings are explicit and do not overlap: model/host/FFmpeg/licenses
 remain under resources, while every VC runtime DLL has one destination next to
 the main executable. This prevents directory/file mappings from competing for
 the same native source file during bundling.
+
+The native IPC startup state is registered before webviews are created. Commands
+received while opening/migrating the index wait on blocking workers until setup
+finishes, preserving the loading screen without a `state not managed` failure.
+Native validation checks the rendered frontend search field and absence of
+bootstrap alerts in addition to the inference engine.

@@ -95,7 +95,8 @@ try {
     Install $qaSetup "/S /NS /D=$otherPath"
     if(!$running.WaitForExit(10000)){throw 'Reinstallation left the previous app running'}
     foreach($workerId in $workers){if(Get-Process -Id $workerId -ErrorAction SilentlyContinue){throw 'Reinstallation left an inference worker running'}}
-    if((Test-Path -LiteralPath $otherPath) -or (Test-Path -LiteralPath $obsolete)){throw 'Upgrade left a duplicate installation or stale runtime file'}
+    if((Test-Path -LiteralPath (Join-Path $otherPath 'smarti-local-search.exe')) -or (Test-Path -LiteralPath $obsolete)){throw 'Upgrade left a duplicate installation or stale runtime file'}
+    if((Test-Path -LiteralPath $otherPath) -and @(Get-ChildItem -LiteralPath $otherPath -Force).Count){throw 'Conflicting install directory contains an unexpected payload'}
     Set-ItemProperty -LiteralPath $registryPath -Name DisplayVersion -Value '99.0.0'
     $downgrade=Start-Process -FilePath $qaSetup -ArgumentList '/S /NS' -WindowStyle Hidden -PassThru -Wait
     if($downgrade.ExitCode -eq 0){throw 'Silent downgrade was accepted'}

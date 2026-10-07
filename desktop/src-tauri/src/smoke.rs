@@ -6,16 +6,50 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tauri::Manager;
+use tauri::{Listener, Manager};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-pub fn upgrade_probe(engine: Arc<Engine>, report: PathBuf) {
+pub fn upgrade_probe(app: tauri::AppHandle, engine: Arc<Engine>, report: PathBuf) {
     std::thread::spawn(move || {
-        let result = wait(&engine, |s| s.inference["ready"] == true);
-        let payload = serde_json::json!({"passed":result.is_ok(),"version":env!("CARGO_PKG_VERSION"),"executable":std::env::current_exe().ok(),"data":engine.data});
+        let result =
+            wait_for_frontend(&app).and_then(|()| wait(&engine, |s| s.inference["ready"] == true));
+        let payload = serde_json::json!({"passed":result.is_ok(),"frontend_ready":result.is_ok(),"error":result.err().map(|error|format!("{error:#}")),"version":env!("CARGO_PKG_VERSION"),"executable":std::env::current_exe().ok(),"data":engine.data});
         let _ = std::fs::write(report, serde_json::to_vec_pretty(&payload).unwrap());
         // Stay alive until the installer closes the application and its job.
     });
+}
+
+fn wait_for_frontend(app: &tauri::AppHandle) -> Result<()> {
+    let (send, receive) = std::sync::mpsc::channel();
+    let listener = app.listen("native-ui-probe", move |event| {
+        let _ = send.send(event.payload().to_owned());
+    });
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| anyhow::anyhow!("Native main webview missing"))?;
+    window.eval(
+        r#"(() => {
+            const timer = setInterval(() => {
+                const error = document.querySelector('.global-errors [role="alert"]');
+                if (error || document.querySelector('#main-search')) {
+                    clearInterval(timer);
+                    window.__TAURI_INTERNALS__.invoke('plugin:event|emit', {
+                        event: 'native-ui-probe',
+                        payload: {ready: !error, error: error?.textContent || null}
+                    });
+                }
+            }, 100);
+        })()"#,
+    )?;
+    let result = receive.recv_timeout(Duration::from_secs(240));
+    app.unlisten(listener);
+    let payload: serde_json::Value = serde_json::from_str(&result?)?;
+    ensure!(
+        payload["ready"] == true,
+        "Native frontend bootstrap failed: {}",
+        payload["error"]
+    );
+    Ok(())
 }
 
 pub fn start(app: tauri::AppHandle, engine: Arc<Engine>, report: PathBuf, corpus: PathBuf) {
@@ -56,6 +90,7 @@ fn run(
     corpus: &std::path::Path,
 ) -> Result<serde_json::Value> {
     ensure!(corpus.is_dir(), "Smoke corpus directory is required");
+    wait_for_frontend(app)?;
     ensure!(
         engine
             .resources

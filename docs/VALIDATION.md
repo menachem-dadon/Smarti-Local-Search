@@ -111,7 +111,12 @@ the final executable plus all resource hashes match the installed QA payload.
 Personal installation/index data are not changed by this validation. Interactive
 installer, physical native UI, clean-machine and signing acceptance remain separate.
 
-Final source checks: 28 core Rust tests (including the real-model test), one
-Tauri window test, 22 frontend tests and four Python tests pass. Workspace Clippy,
+Final source checks: 28 core Rust tests (including the real-model test), three
+Tauri tests (window bounds and startup), 22 frontend tests and four Python tests pass. Workspace Clippy,
 formatting, TypeScript and production frontend build pass. The final synthetic
 150,000-file status measurement averaged 20.02 ms per refresh on this host.
+
+Startup regression tests additionally check that simultaneous early IPC requests
+wait for initialization and that initialization failures reach every waiter.
+Installed native probes inspect the actual webview for a rendered search field
+and fail on a bootstrap alert; backend readiness alone is insufficient.

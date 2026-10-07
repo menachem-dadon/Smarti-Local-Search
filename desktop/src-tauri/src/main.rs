@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod smoke;
+mod startup;
 mod windows_integration;
 use smarti_search_core::{Engine, types::*};
 use std::{path::PathBuf, sync::Arc};
@@ -41,23 +42,26 @@ fn apply_tray_language(app: &tauri::AppHandle, language: &str) -> tauri::Result<
 
 #[tauri::command]
 async fn search(
-    state: tauri::State<'_, Arc<Engine>>,
+    state: tauri::State<'_, Arc<startup::Startup<Arc<Engine>>>>,
     request: SearchRequest,
 ) -> Result<SearchResponse, String> {
-    let e = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || e.search(request).map_err(|e| e.to_string()))
-        .await
-        .map_err(|e| e.to_string())?
+    let startup = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        startup.wait()?.search(request).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn command(
     app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<Engine>>,
+    state: tauri::State<'_, Arc<startup::Startup<Arc<Engine>>>>,
     action: String,
     args: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let e = state.inner().clone();
+    let startup = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let e = startup.wait()?;
         dispatch(&app, &e, &action, args).map_err(|e| e.to_string())
     })
     .await
@@ -431,6 +435,7 @@ fn main() {
         );
     }
     builder
+        .manage(Arc::new(startup::Startup::<Arc<Engine>>::default()))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
@@ -464,7 +469,7 @@ fn main() {
                 app.path().resource_dir()?.join("resources")
             };
             let emit = handle.clone();
-            let engine = Engine::open(
+            let engine_result = Engine::open(
                 base,
                 resources,
                 Arc::new(move |name, data| {
@@ -477,7 +482,13 @@ fn main() {
                                     if first {let _=emit.notification().builder().title("Smarti Local Search").body(if settings.language=="he"{"האינדוקס הראשוני הושלם. הקבצים שלך מוכנים לחיפוש."}else{"Initial indexing finished. Your files are ready to search."}).show();let _=engine.store.lock().unwrap().db.execute("INSERT OR REPLACE INTO settings VALUES('initial_notification','sent')",[]);}
                     }
                 }),
-            )?;
+            );
+            if let Err(error) = &engine_result {
+                app.state::<Arc<startup::Startup<Arc<Engine>>>>()
+                    .complete(Err(error.to_string()));
+            }
+            let engine = engine_result?;
+            app.manage(engine.clone());
             let mut settings = engine.settings()?;
             if isolated_smoke && !settings.onboarded {
                 settings.shortcut = "Ctrl+Alt+Shift+F11".into();
@@ -499,14 +510,13 @@ fn main() {
                     &format!("Global shortcut unavailable: {error}"),
                 )?;
             }
-            app.manage(engine.clone());
             let arguments:Vec<String>=std::env::args().collect();
             if let Some(report)=arguments.iter().find_map(|value|value.strip_prefix("--smoke-test=")) {
                 let corpus=arguments.iter().find_map(|value|value.strip_prefix("--smoke-root=")).ok_or_else(||anyhow::anyhow!("--smoke-root is required"))?;
                 smoke::start(handle.clone(),engine.clone(),PathBuf::from(report),PathBuf::from(corpus));
             }
             if let Some(report)=arguments.iter().find_map(|value|value.strip_prefix("--upgrade-probe=")) {
-                smoke::upgrade_probe(engine.clone(),PathBuf::from(report));
+                smoke::upgrade_probe(handle.clone(),engine.clone(),PathBuf::from(report));
             }
             let quick = MenuItem::with_id(app, "quick", "Quick Search", true, None::<&str>)?;
             let main = MenuItem::with_id(app, "main", "Smarti Local Search", true, None::<&str>)?;
@@ -541,6 +551,7 @@ fn main() {
             {
                 w.hide()?;
             }
+            app.state::<Arc<startup::Startup<Arc<Engine>>>>().complete(Ok(engine));
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -549,8 +560,8 @@ fn main() {
                     api.prevent_close();
                     let _ = window.hide();
                 } else {
-                    let e = window.app_handle().state::<Arc<Engine>>();
-                    if e.settings().is_ok_and(|s| s.minimize_to_tray) {
+                    let engine = window.app_handle().try_state::<Arc<Engine>>();
+                    if engine.is_some_and(|e| e.settings().is_ok_and(|s| s.minimize_to_tray)) {
                         api.prevent_close();
                         let _ = window.hide();
                     } else {
