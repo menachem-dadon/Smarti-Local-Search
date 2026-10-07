@@ -1,2 +1,11 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Preserve upstream license files byte for byte.
+resources/licenses/** -text -whitespace
+
+# PDF cross-reference tables have structural trailing spaces.
+*.pdf binary
+
+# The supplied specification uses Markdown hard line breaks.
+docs/SPECIFICATION.md -whitespace

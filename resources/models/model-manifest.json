@@ -1,0 +1,9 @@
+{
+  "model_id": "litert-community/embeddinggemma-2-740m-litert-lm",
+  "source_revision": "24d962e906c7d332c6428e71c9676855024569e2",
+  "file_name": "embeddinggemma-2-740m.litertlm",
+  "sha256": "e7a8a2204b91e0f96e92960e84a09a89212e1633dcb7575a9bf3378b4df77f4c",
+  "size": 484622336,
+  "license": "Apache-2.0",
+  "native_dimensions": 768
+}

@@ -1,0 +1,548 @@
+# Third-party notices
+
+No license is assigned to Smarti Local Search by this file. Third-party components retain their own licenses.
+
+- EmbeddingGemma 2 740M: Google, Apache-2.0. Pinned official LiteRT model source and SHA-256 are in `resources/models/model-manifest.json`. Model card: https://huggingface.co/google/embeddinggemma-2 . Applicable model policy and limitations must be reviewed for any redistribution.
+- LiteRT-LM: Google ODML authors, Apache-2.0; https://github.com/google-ai-edge/LiteRT-LM . Python wheel and its DLLs are bundled together.
+- Tabler Icons: Copyright (c) 2020-2026 Paweł Kuna, MIT; https://github.com/tabler/tabler-icons . Artwork is inline SVG from the official `@tabler/icons-react` package, pinned to 3.48.0.
+- FFmpeg: the FFmpeg developers, LGPL build from BtbN/FFmpeg-Builds. The exact release, archive checksum and source URL are in `resources/ffmpeg/manifest.json`. Dynamic libraries are distributed unmodified. Corresponding source and build scripts: https://github.com/BtbN/FFmpeg-Builds/tree/master and https://git.ffmpeg.org/ffmpeg.git . Include the matching source when redistributing as required by its licenses.
+- PDFium and pypdfium2: BSD-3-Clause and Apache-2.0/BSD; license files accompanying the wheel are included in the generated package inventory.
+- SQLite: public domain. USearch: Apache-2.0. Tree-sitter and language grammars: MIT.
+- React, Tauri, Vite and the remaining Rust/npm/Python dependencies retain their respective licenses. `scripts/collect_notices.py` copies their supplied license/notice files and generates a versioned inventory under `resources/licenses/` before packaging.
+- Microsoft Visual C++ runtime: Microsoft, application-local distributable code supplied by the installed Visual Studio Build Tools. Versioned file hashes are in `resources/native/manifest.json`; Microsoft's supplied terms are bundled in `resources/licenses/Microsoft-VC-Runtime-License.html`. Deployment reference: https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files .
+
+The design foundations were supplied by the user in `tokens.zip`; their values and relevant primitives are used without importing the original Smarti application. Original application-specific documentation is retained as a design reference under `docs/DESIGN_REFERENCE.md`.
+
+
+## Dependency inventory
+
+- Python: altgraph 0.17.5 — MIT
+- Python: defusedxml 0.7.1 — PSFL
+- Python: et_xmlfile 2.0.0 — MIT
+- Python: litert-lm-api 0.18.0 — Apache-2.0
+- Python: lxml 6.1.3 — BSD-3-Clause
+- Python: msgpack 1.2.3 — Apache-2.0
+- Python: numpy 2.3.3 — Copyright (c) 2005-2025, NumPy Developers.
+- Python: odfpy 1.4.1 — See bundled license
+- Python: openpyxl 3.1.5 — MIT
+- Python: openvino 2026.4.1 — Apache-2.0
+- Python: openvino-telemetry 2025.2.0 — OSI Approved :: Apache Software License
+- Python: packaging 26.3 — Apache-2.0 OR BSD-2-Clause
+- Python: pefile 2024.8.26 — MIT
+- Python: pillow 11.3.0 — MIT-CMU
+- Python: pip 25.1.1 — MIT
+- Python: psutil 7.1.0 — BSD-3-Clause
+- Python: pyinstaller 6.22.3 — GPLv2-or-later with a special exception which allows to use PyInstaller to build and distribute non-free programs (including commercial ones)
+- Python: pyinstaller-hooks-contrib 2026.8 — See bundled license
+- Python: pypdfium2 5.14.0 — BSD-3-Clause, Apache-2.0, dependency licenses
+- Python: python-docx 1.2.0 — MIT
+- Python: python-pptx 1.0.2 — MIT
+- Python: pywin32-ctypes 0.2.3 — BSD-3-Clause
+- Python: setuptools 84.0.0 — MIT
+- Python: typing_extensions 4.16.0 — PSF-2.0
+- Python: xlsxwriter 3.2.9 — BSD-2-Clause
+- Rust: adler2 2.0.1 — 0BSD OR MIT OR Apache-2.0
+- Rust: aho-corasick 1.1.5 — Unlicense OR MIT
+- Rust: alloc-no-stdlib 3.0.0 — BSD-3-Clause
+- Rust: alloc-stdlib 0.3.0 — BSD-3-Clause
+- Rust: anyhow 1.0.104 — MIT OR Apache-2.0
+- Rust: arboard 3.6.1 — MIT OR Apache-2.0
+- Rust: arrayvec 0.7.8 — MIT OR Apache-2.0
+- Rust: autocfg 1.5.1 — Apache-2.0 OR MIT
+- Rust: base64 0.22.1 — MIT OR Apache-2.0
+- Rust: base64 0.23.1 — MIT OR Apache-2.0
+- Rust: bit-set 0.8.0 — Apache-2.0 OR MIT
+- Rust: bit-vec 0.8.0 — Apache-2.0 OR MIT
+- Rust: bitflags 1.3.2 — MIT/Apache-2.0
+- Rust: bitflags 2.13.2 — MIT OR Apache-2.0
+- Rust: blake3 1.8.7 — CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception
+- Rust: block-buffer 0.10.4 — MIT OR Apache-2.0
+- Rust: brotli 9.0.0 — BSD-3-Clause AND MIT
+- Rust: brotli-decompressor 6.0.1 — BSD-3-Clause/MIT
+- Rust: bs58 0.5.1 — MIT/Apache-2.0
+- Rust: bytemuck 1.25.2 — Zlib OR Apache-2.0 OR MIT
+- Rust: byteorder 1.5.0 — Unlicense OR MIT
+- Rust: byteorder-lite 0.1.0 — Unlicense OR MIT
+- Rust: bytes 1.12.1 — MIT
+- Rust: camino 1.2.6 — MIT OR Apache-2.0
+- Rust: cargo-platform 0.1.9 — MIT OR Apache-2.0
+- Rust: cargo_metadata 0.19.2 — MIT
+- Rust: cargo_toml 1.0.1 — Apache-2.0 OR MIT
+- Rust: cc 1.6.0 — MIT OR Apache-2.0
+- Rust: cfb 0.14.0 — MIT
+- Rust: cfg-if 1.0.5 — MIT OR Apache-2.0
+- Rust: chrono 0.4.45 — MIT OR Apache-2.0
+- Rust: clipboard-win 5.4.1 — BSL-1.0
+- Rust: codespan-reporting 0.13.1 — Apache-2.0
+- Rust: constant_time_eq 0.4.2 — CC0-1.0 OR MIT-0 OR Apache-2.0
+- Rust: cookie 0.18.2 — MIT OR Apache-2.0
+- Rust: core_detect 1.0.0 — MIT/Apache-2.0
+- Rust: cpufeatures 0.2.17 — MIT OR Apache-2.0
+- Rust: cpufeatures 0.3.1 — MIT OR Apache-2.0
+- Rust: crc32fast 1.5.2 — MIT OR Apache-2.0
+- Rust: crossbeam-channel 0.5.17 — MIT OR Apache-2.0
+- Rust: crossbeam-utils 0.8.23 — MIT OR Apache-2.0
+- Rust: crypto-common 0.1.7 — MIT OR Apache-2.0
+- Rust: cssparser 0.37.0 — MPL-2.0
+- Rust: cssparser-macros 0.7.1 — MPL-2.0
+- Rust: ctor 1.0.13 — Apache-2.0 OR MIT
+- Rust: cxx 1.0.202 — MIT OR Apache-2.0
+- Rust: cxx-build 1.0.202 — MIT OR Apache-2.0
+- Rust: cxxbridge-flags 1.0.202 — MIT OR Apache-2.0
+- Rust: cxxbridge-macro 1.0.202 — MIT OR Apache-2.0
+- Rust: darling 0.24.1 — MIT
+- Rust: darling_core 0.24.1 — MIT
+- Rust: darling_macro 0.24.1 — MIT
+- Rust: defmt 1.1.1 — MIT OR Apache-2.0
+- Rust: defmt-macros 1.1.1 — MIT OR Apache-2.0
+- Rust: defmt-parser 1.0.0 — MIT OR Apache-2.0
+- Rust: deranged 0.5.8 — MIT OR Apache-2.0
+- Rust: derive_more 2.1.1 — MIT
+- Rust: derive_more-impl 2.1.1 — MIT
+- Rust: digest 0.10.7 — MIT OR Apache-2.0
+- Rust: dirs 7.0.0 — MIT OR Apache-2.0
+- Rust: dirs-sys 0.5.0 — MIT OR Apache-2.0
+- Rust: displaydoc 0.2.7 — MIT OR Apache-2.0
+- Rust: dom_query 0.28.0 — MIT
+- Rust: dpi 0.1.2 — Apache-2.0 AND MIT
+- Rust: dtoa 1.0.11 — MIT OR Apache-2.0
+- Rust: dtoa-short 0.3.5 — MPL-2.0
+- Rust: dunce 1.0.5 — CC0-1.0 OR MIT-0 OR Apache-2.0
+- Rust: dyn-clone 1.0.20 — MIT OR Apache-2.0
+- Rust: embed-resource 3.0.12 — MIT
+- Rust: encoding_rs 0.8.42 — (Apache-2.0 OR MIT) AND BSD-3-Clause
+- Rust: equivalent 1.0.2 — Apache-2.0 OR MIT
+- Rust: erased-serde 0.4.10 — MIT OR Apache-2.0
+- Rust: error-code 3.4.0 — BSL-1.0
+- Rust: fallible-iterator 0.3.0 — MIT/Apache-2.0
+- Rust: fallible-streaming-iterator 0.1.9 — MIT/Apache-2.0
+- Rust: fastrand 2.5.0 — Apache-2.0 OR MIT
+- Rust: fax 0.2.7 — MIT
+- Rust: fdeflate 0.3.7 — MIT OR Apache-2.0
+- Rust: find-msvc-tools 0.1.14 — MIT OR Apache-2.0
+- Rust: flate2 1.1.10 — MIT OR Apache-2.0
+- Rust: fnv 1.0.7 — Apache-2.0 / MIT
+- Rust: foldhash 0.1.5 — Zlib
+- Rust: foldhash 0.2.0 — Zlib
+- Rust: form_urlencoded 1.2.2 — MIT OR Apache-2.0
+- Rust: generic-array 0.14.7 — MIT
+- Rust: getrandom 0.3.4 — MIT OR Apache-2.0
+- Rust: getrandom 0.4.3 — MIT OR Apache-2.0
+- Rust: glob 0.3.4 — MIT OR Apache-2.0
+- Rust: global-hotkey 0.8.0 — Apache-2.0 OR MIT
+- Rust: half 2.7.1 — MIT OR Apache-2.0
+- Rust: hashbrown 0.12.3 — MIT OR Apache-2.0
+- Rust: hashbrown 0.15.5 — MIT OR Apache-2.0
+- Rust: hashbrown 0.17.1 — MIT OR Apache-2.0
+- Rust: hashlink 0.10.0 — MIT OR Apache-2.0
+- Rust: heck 0.5.0 — MIT OR Apache-2.0
+- Rust: hex 0.4.3 — MIT OR Apache-2.0
+- Rust: html5ever 0.39.0 — MIT OR Apache-2.0
+- Rust: http 1.5.0 — MIT OR Apache-2.0
+- Rust: http-range 0.1.5 — MIT
+- Rust: ico 0.5.0 — MIT
+- Rust: icu_collections 2.3.0 — Unicode-3.0
+- Rust: icu_locale_core 2.3.0 — Unicode-3.0
+- Rust: icu_normalizer 2.3.0 — Unicode-3.0
+- Rust: icu_normalizer_data 2.3.0 — Unicode-3.0
+- Rust: icu_properties 2.3.0 — Unicode-3.0
+- Rust: icu_properties_data 2.3.0 — Unicode-3.0
+- Rust: icu_provider 2.3.1 — Unicode-3.0
+- Rust: ident_case 1.0.1 — MIT/Apache-2.0
+- Rust: idna 1.1.0 — MIT OR Apache-2.0
+- Rust: idna_adapter 1.2.2 — Apache-2.0 OR MIT
+- Rust: image 0.25.10 — MIT OR Apache-2.0
+- Rust: indexmap 1.9.3 — Apache-2.0 OR MIT
+- Rust: indexmap 2.14.2 — Apache-2.0 OR MIT
+- Rust: infer 0.22.0 — MIT
+- Rust: itoa 1.0.18 — MIT OR Apache-2.0
+- Rust: jiff 0.2.38 — Unlicense OR MIT
+- Rust: jiff-core 0.1.1 — Unlicense OR MIT
+- Rust: jiff-tzdb 0.1.9 — Unlicense OR MIT
+- Rust: jiff-tzdb-platform 0.1.3 — Unlicense OR MIT
+- Rust: json-patch 4.2.0 — MIT/Apache-2.0
+- Rust: jsonptr 0.7.1 — MIT OR Apache-2.0
+- Rust: keyboard-types 0.7.0 — MIT OR Apache-2.0
+- Rust: keyboard-types 0.8.3 — MIT OR Apache-2.0
+- Rust: libc 0.2.190 — MIT OR Apache-2.0
+- Rust: libsqlite3-sys 0.35.0 — MIT
+- Rust: link-cplusplus 1.0.12 — MIT OR Apache-2.0
+- Rust: litemap 0.8.3 — Unicode-3.0
+- Rust: lock_api 0.4.14 — MIT OR Apache-2.0
+- Rust: log 0.4.34 — MIT OR Apache-2.0
+- Rust: markup5ever 0.39.0 — MIT OR Apache-2.0
+- Rust: memchr 2.8.3 — Unlicense OR MIT
+- Rust: mime 0.3.17 — MIT OR Apache-2.0
+- Rust: miniz_oxide 0.8.9 — MIT OR Zlib OR Apache-2.0
+- Rust: miniz_oxide 0.9.1 — MIT OR Zlib OR Apache-2.0
+- Rust: mio 1.2.4 — MIT
+- Rust: moxcms 0.8.1 — BSD-3-Clause OR Apache-2.0
+- Rust: muda 0.20.0 — Apache-2.0 OR MIT
+- Rust: multiversion_no_op 1.0.0 — Apache-2.0 OR MIT
+- Rust: new_debug_unreachable 1.0.6 — MIT
+- Rust: notify 8.2.0 — CC0-1.0
+- Rust: notify-rust 4.18.1 — MIT OR Apache-2.0
+- Rust: notify-types 2.1.0 — MIT OR Apache-2.0
+- Rust: ntapi 0.4.3 — Apache-2.0 OR MIT
+- Rust: num-conv 0.2.2 — MIT OR Apache-2.0
+- Rust: num-traits 0.2.19 — MIT OR Apache-2.0
+- Rust: once_cell 1.21.4 — MIT OR Apache-2.0
+- Rust: option-ext 0.2.0 — MPL-2.0
+- Rust: parking_lot 0.12.5 — MIT OR Apache-2.0
+- Rust: parking_lot_core 0.9.12 — MIT OR Apache-2.0
+- Rust: percent-encoding 2.3.2 — MIT OR Apache-2.0
+- Rust: phf 0.13.1 — MIT
+- Rust: phf_codegen 0.13.1 — MIT
+- Rust: phf_generator 0.13.1 — MIT
+- Rust: phf_macros 0.13.1 — MIT
+- Rust: phf_shared 0.13.1 — MIT
+- Rust: pin-project-lite 0.2.17 — Apache-2.0 OR MIT
+- Rust: pkg-config 0.3.34 — MIT OR Apache-2.0
+- Rust: plist 1.10.1 — MIT
+- Rust: png 0.17.16 — MIT OR Apache-2.0
+- Rust: png 0.18.1 — MIT OR Apache-2.0
+- Rust: potential_utf 0.1.6 — Unicode-3.0
+- Rust: powerfmt 0.2.1 — MIT OR Apache-2.0
+- Rust: ppv-lite86 0.2.21 — MIT OR Apache-2.0
+- Rust: precomputed-hash 0.1.1 — MIT
+- Rust: proc-macro2 1.0.107 — MIT OR Apache-2.0
+- Rust: pxfm 0.1.30 — BSD-3-Clause OR Apache-2.0
+- Rust: quick-error 2.0.1 — MIT/Apache-2.0
+- Rust: quick-xml 0.42.0 — MIT
+- Rust: quote 1.0.47 — MIT OR Apache-2.0
+- Rust: rand 0.9.5 — MIT OR Apache-2.0
+- Rust: rand_chacha 0.9.0 — MIT OR Apache-2.0
+- Rust: rand_core 0.9.5 — MIT OR Apache-2.0
+- Rust: raw-window-handle 0.6.2 — MIT OR Apache-2.0 OR Zlib
+- Rust: ref-cast 1.0.27 — MIT OR Apache-2.0
+- Rust: ref-cast-impl 1.0.27 — MIT OR Apache-2.0
+- Rust: regex 1.13.1 — MIT OR Apache-2.0
+- Rust: regex-automata 0.4.18 — MIT OR Apache-2.0
+- Rust: regex-syntax 0.8.11 — MIT OR Apache-2.0
+- Rust: rfd 0.16.0 — MIT
+- Rust: rmp 0.8.15 — MIT
+- Rust: rmp-serde 1.3.1 — MIT
+- Rust: rusqlite 0.37.0 — MIT
+- Rust: rustc-hash 2.1.3 — Apache-2.0 OR MIT
+- Rust: rustc_version 0.4.1 — MIT OR Apache-2.0
+- Rust: rustversion 1.0.23 — MIT OR Apache-2.0
+- Rust: same-file 1.0.6 — Unlicense/MIT
+- Rust: schemars 0.8.22 — MIT
+- Rust: schemars 0.9.0 — MIT
+- Rust: schemars 1.2.2 — MIT
+- Rust: schemars_derive 0.8.22 — MIT
+- Rust: scopeguard 1.2.0 — MIT OR Apache-2.0
+- Rust: scratch 1.0.9 — MIT OR Apache-2.0
+- Rust: selectors 0.38.0 — MPL-2.0
+- Rust: semver 1.0.28 — MIT OR Apache-2.0
+- Rust: serde 1.0.229 — MIT OR Apache-2.0
+- Rust: serde-untagged 0.1.9 — MIT OR Apache-2.0
+- Rust: serde_bytes 0.11.19 — MIT OR Apache-2.0
+- Rust: serde_core 1.0.229 — MIT OR Apache-2.0
+- Rust: serde_derive 1.0.229 — MIT OR Apache-2.0
+- Rust: serde_derive_internals 0.29.1 — MIT OR Apache-2.0
+- Rust: serde_json 1.0.151 — MIT OR Apache-2.0
+- Rust: serde_repr 0.1.21 — MIT OR Apache-2.0
+- Rust: serde_spanned 1.1.1 — MIT OR Apache-2.0
+- Rust: serde_with 3.24.0 — MIT OR Apache-2.0
+- Rust: serde_with_macros 3.24.0 — MIT OR Apache-2.0
+- Rust: serialize-to-javascript 0.1.2 — MIT OR Apache-2.0
+- Rust: serialize-to-javascript-impl 0.1.2 — MIT OR Apache-2.0
+- Rust: servo_arc 0.4.3 — MIT OR Apache-2.0
+- Rust: sha2 0.10.9 — MIT OR Apache-2.0
+- Rust: shlex 2.0.1 — MIT OR Apache-2.0
+- Rust: simd-adler32 0.3.10 — MIT
+- Rust: simdutf8 0.1.5 — MIT OR Apache-2.0
+- Rust: siphasher 1.0.4 — MIT OR Apache-2.0
+- Rust: smallvec 1.16.2 — MIT OR Apache-2.0
+- Rust: socket2 0.6.5 — MIT OR Apache-2.0
+- Rust: softbuffer 0.4.8 — MIT OR Apache-2.0
+- Rust: stable_deref_trait 1.2.1 — MIT OR Apache-2.0
+- Rust: streaming-iterator 0.1.9 — MIT OR Apache-2.0
+- Rust: string_cache 0.9.0 — MIT OR Apache-2.0
+- Rust: string_cache_codegen 0.6.1 — MIT OR Apache-2.0
+- Rust: strsim 0.11.1 — MIT
+- Rust: syn 2.0.119 — MIT OR Apache-2.0
+- Rust: syn 3.0.6 — MIT OR Apache-2.0
+- Rust: synstructure 0.14.0 — MIT
+- Rust: sysinfo 0.37.2 — MIT
+- Rust: tao 0.37.1 — Apache-2.0
+- Rust: tauri 2.12.1 — Apache-2.0 OR MIT
+- Rust: tauri-build 2.7.1 — Apache-2.0 OR MIT
+- Rust: tauri-codegen 2.7.1 — Apache-2.0 OR MIT
+- Rust: tauri-macros 2.7.1 — Apache-2.0 OR MIT
+- Rust: tauri-plugin 2.7.1 — Apache-2.0 OR MIT
+- Rust: tauri-plugin-clipboard-manager 2.4.1 — Apache-2.0 OR MIT
+- Rust: tauri-plugin-dialog 2.8.1 — Apache-2.0 OR MIT
+- Rust: tauri-plugin-fs 2.6.0 — Apache-2.0 OR MIT
+- Rust: tauri-plugin-global-shortcut 2.4.0 — Apache-2.0 OR MIT
+- Rust: tauri-plugin-notification 2.5.1 — Apache-2.0 OR MIT
+- Rust: tauri-plugin-single-instance 2.5.2 — Apache-2.0 OR MIT
+- Rust: tauri-plugin-window-state 2.5.0 — Apache-2.0 OR MIT
+- Rust: tauri-runtime 2.12.1 — Apache-2.0 OR MIT
+- Rust: tauri-runtime-wry 2.12.1 — Apache-2.0 OR MIT
+- Rust: tauri-utils 2.10.1 — Apache-2.0 OR MIT
+- Rust: tauri-winres 0.3.6 — MIT
+- Rust: tauri-winrt-notification 0.8.1 — MIT OR Apache-2.0
+- Rust: tempfile 3.27.0 — MIT OR Apache-2.0
+- Rust: tendril 0.5.1 — MIT OR Apache-2.0
+- Rust: termcolor 1.4.1 — Unlicense OR MIT
+- Rust: thiserror 2.0.21 — MIT OR Apache-2.0
+- Rust: thiserror-impl 2.0.21 — MIT OR Apache-2.0
+- Rust: tiff 0.11.3 — MIT
+- Rust: time 0.3.55 — MIT OR Apache-2.0
+- Rust: time-core 0.1.9 — MIT OR Apache-2.0
+- Rust: time-macros 0.2.32 — MIT OR Apache-2.0
+- Rust: tinystr 0.8.4 — Unicode-3.0
+- Rust: tinyvec 1.13.3 — Zlib OR Apache-2.0 OR MIT
+- Rust: tokio 1.53.2 — MIT
+- Rust: toml 1.1.6+spec-1.1.0 — MIT OR Apache-2.0
+- Rust: toml_datetime 1.1.1+spec-1.1.0 — MIT OR Apache-2.0
+- Rust: toml_parser 1.1.3+spec-1.1.0 — MIT OR Apache-2.0
+- Rust: toml_writer 1.1.2+spec-1.1.0 — MIT OR Apache-2.0
+- Rust: tracing 0.1.44 — MIT
+- Rust: tracing-attributes 0.1.31 — MIT
+- Rust: tracing-core 0.1.36 — MIT
+- Rust: tray-icon 0.25.1 — MIT OR Apache-2.0
+- Rust: tree-sitter 0.25.10 — MIT
+- Rust: tree-sitter-javascript 0.25.0 — MIT
+- Rust: tree-sitter-language 0.1.8 — MIT
+- Rust: tree-sitter-python 0.25.0 — MIT
+- Rust: tree-sitter-rust 0.24.2 — MIT
+- Rust: tree-sitter-typescript 0.23.2 — MIT
+- Rust: typeid 1.0.3 — MIT OR Apache-2.0
+- Rust: typenum 1.20.1 — MIT OR Apache-2.0
+- Rust: unicode-ident 1.0.26 — (MIT OR Apache-2.0) AND Unicode-3.0
+- Rust: unicode-segmentation 1.13.3 — MIT OR Apache-2.0
+- Rust: unicode-width 0.2.2 — MIT OR Apache-2.0
+- Rust: url 2.5.8 — MIT OR Apache-2.0
+- Rust: urlpattern 0.6.0 — MIT
+- Rust: usearch 2.26.4 — Apache-2.0
+- Rust: utf8_iter 1.0.4 — Apache-2.0 OR MIT
+- Rust: uuid 1.27.0 — Apache-2.0 OR MIT
+- Rust: vcpkg 0.2.15 — MIT/Apache-2.0
+- Rust: version_check 0.9.5 — MIT/Apache-2.0
+- Rust: vswhom 0.1.0 — MIT
+- Rust: vswhom-sys 0.1.3 — MIT
+- Rust: walkdir 2.5.0 — Unlicense/MIT
+- Rust: web-time 1.1.0 — MIT OR Apache-2.0
+- Rust: web_atoms 0.2.6 — MIT OR Apache-2.0
+- Rust: webview2-com 0.39.1 — MIT
+- Rust: webview2-com-macros 0.8.1 — MIT
+- Rust: webview2-com-sys 0.39.1 — MIT
+- Rust: weezl 0.1.12 — MIT OR Apache-2.0
+- Rust: winapi 0.3.9 — MIT/Apache-2.0
+- Rust: winapi-util 0.1.11 — Unlicense OR MIT
+- Rust: window-vibrancy 0.8.1 — Apache-2.0 OR MIT
+- Rust: windows 0.61.3 — MIT OR Apache-2.0
+- Rust: windows 0.62.2 — MIT OR Apache-2.0
+- Rust: windows-collections 0.2.0 — MIT OR Apache-2.0
+- Rust: windows-collections 0.3.2 — MIT OR Apache-2.0
+- Rust: windows-core 0.61.2 — MIT OR Apache-2.0
+- Rust: windows-core 0.62.2 — MIT OR Apache-2.0
+- Rust: windows-future 0.2.1 — MIT OR Apache-2.0
+- Rust: windows-future 0.3.2 — MIT OR Apache-2.0
+- Rust: windows-implement 0.60.2 — MIT OR Apache-2.0
+- Rust: windows-interface 0.59.3 — MIT OR Apache-2.0
+- Rust: windows-link 0.1.3 — MIT OR Apache-2.0
+- Rust: windows-link 0.2.1 — MIT OR Apache-2.0
+- Rust: windows-numerics 0.2.0 — MIT OR Apache-2.0
+- Rust: windows-numerics 0.3.1 — MIT OR Apache-2.0
+- Rust: windows-result 0.3.4 — MIT OR Apache-2.0
+- Rust: windows-result 0.4.1 — MIT OR Apache-2.0
+- Rust: windows-strings 0.4.2 — MIT OR Apache-2.0
+- Rust: windows-strings 0.5.1 — MIT OR Apache-2.0
+- Rust: windows-sys 0.59.0 — MIT OR Apache-2.0
+- Rust: windows-sys 0.60.2 — MIT OR Apache-2.0
+- Rust: windows-sys 0.61.2 — MIT OR Apache-2.0
+- Rust: windows-targets 0.52.6 — MIT OR Apache-2.0
+- Rust: windows-targets 0.53.5 — MIT OR Apache-2.0
+- Rust: windows-threading 0.1.0 — MIT OR Apache-2.0
+- Rust: windows-threading 0.2.1 — MIT OR Apache-2.0
+- Rust: windows-version 0.1.7 — MIT OR Apache-2.0
+- Rust: windows_x86_64_msvc 0.52.6 — MIT OR Apache-2.0
+- Rust: windows_x86_64_msvc 0.53.1 — MIT OR Apache-2.0
+- Rust: winnow 1.0.4 — MIT
+- Rust: winreg 0.55.0 — MIT
+- Rust: winreg 0.56.0 — MIT
+- Rust: writeable 0.6.4 — Unicode-3.0
+- Rust: wry 0.57.0 — Apache-2.0 OR MIT
+- Rust: yoke 0.8.3 — Unicode-3.0
+- Rust: yoke-derive 0.8.4 — Unicode-3.0
+- Rust: zerocopy 0.8.60 — BSD-2-Clause OR Apache-2.0 OR MIT
+- Rust: zerocopy-derive 0.8.60 — BSD-2-Clause OR Apache-2.0 OR MIT
+- Rust: zerofrom 0.1.8 — Unicode-3.0
+- Rust: zerofrom-derive 0.1.8 — Unicode-3.0
+- Rust: zerotrie 0.2.5 — Unicode-3.0
+- Rust: zerovec 0.11.8 — Unicode-3.0
+- Rust: zerovec-derive 0.11.6 — Unicode-3.0
+- Rust: zlib-rs 0.6.8 — Zlib
+- Rust: zmij 1.0.23 — MIT
+- Rust: zune-core 0.5.3 — MIT OR Apache-2.0 OR Zlib
+- Rust: zune-jpeg 0.5.15 — MIT OR Apache-2.0 OR Zlib
+- npm: @adobe/css-tools 4.5.0 — MIT
+- npm: @asamuzakjp/css-color 3.2.0 — MIT
+- npm: @babel/code-frame 7.29.7 — MIT
+- npm: @babel/compat-data 7.29.7 — MIT
+- npm: @babel/core 7.29.7 — MIT
+- npm: @babel/generator 7.29.8 — MIT
+- npm: @babel/helper-compilation-targets 7.29.7 — MIT
+- npm: @babel/helper-globals 7.29.7 — MIT
+- npm: @babel/helper-module-imports 7.29.7 — MIT
+- npm: @babel/helper-module-transforms 7.29.7 — MIT
+- npm: @babel/helper-plugin-utils 7.29.7 — MIT
+- npm: @babel/helper-string-parser 7.29.7 — MIT
+- npm: @babel/helper-validator-identifier 7.29.7 — MIT
+- npm: @babel/helper-validator-option 7.29.7 — MIT
+- npm: @babel/helpers 7.29.7 — MIT
+- npm: @babel/parser 7.29.9 — MIT
+- npm: @babel/plugin-transform-react-jsx-self 7.29.7 — MIT
+- npm: @babel/plugin-transform-react-jsx-source 7.29.7 — MIT
+- npm: @babel/runtime 7.29.7 — MIT
+- npm: @babel/template 7.29.7 — MIT
+- npm: @babel/traverse 7.29.8 — MIT
+- npm: @babel/types 7.29.8 — MIT
+- npm: @csstools/color-helpers 5.1.0 — MIT-0
+- npm: @csstools/css-calc 2.1.4 — MIT
+- npm: @csstools/css-color-parser 3.1.0 — MIT
+- npm: @csstools/css-parser-algorithms 3.0.5 — MIT
+- npm: @csstools/css-tokenizer 3.0.4 — MIT
+- npm: @esbuild/win32-x64 0.28.2 — MIT
+- npm: @jridgewell/gen-mapping 0.3.13 — MIT
+- npm: @jridgewell/remapping 2.3.5 — MIT
+- npm: @jridgewell/resolve-uri 3.1.2 — MIT
+- npm: @jridgewell/sourcemap-codec 1.6.0 — MIT
+- npm: @jridgewell/trace-mapping 0.3.31 — MIT
+- npm: @resvg/resvg-js 2.6.2 — MPL-2.0
+- npm: @resvg/resvg-js-win32-x64-msvc 2.6.2 — MPL-2.0
+- npm: @rolldown/pluginutils 1.0.0-beta.35 — MIT
+- npm: @rollup/rollup-win32-x64-gnu 4.64.0 — MIT
+- npm: @rollup/rollup-win32-x64-msvc 4.64.0 — MIT
+- npm: @standard-schema/spec 1.1.0 — MIT
+- npm: @tabler/icons 3.48.0 — MIT
+- npm: @tabler/icons-react 3.48.0 — MIT
+- npm: @tanstack/react-virtual 3.13.12 — MIT
+- npm: @tanstack/virtual-core 3.13.12 — MIT
+- npm: @tauri-apps/api 2.12.1 — Apache-2.0 OR MIT
+- npm: @tauri-apps/cli 2.12.1 — Apache-2.0 OR MIT
+- npm: @tauri-apps/cli-win32-x64-msvc 2.12.1 — Apache-2.0 OR MIT
+- npm: @tauri-apps/plugin-clipboard-manager 2.4.1 — MIT OR Apache-2.0
+- npm: @tauri-apps/plugin-dialog 2.8.1 — MIT OR Apache-2.0
+- npm: @testing-library/dom 10.4.1 — MIT
+- npm: @testing-library/jest-dom 6.8.0 — MIT
+- npm: @testing-library/react 16.3.0 — MIT
+- npm: @types/aria-query 5.0.4 — MIT
+- npm: @types/babel__core 7.20.5 — MIT
+- npm: @types/babel__generator 7.27.0 — MIT
+- npm: @types/babel__template 7.4.4 — MIT
+- npm: @types/babel__traverse 7.28.0 — MIT
+- npm: @types/chai 5.2.3 — MIT
+- npm: @types/deep-eql 4.0.2 — MIT
+- npm: @types/estree 1.0.9 — MIT
+- npm: @types/node 22.20.5 — MIT
+- npm: @types/react 19.1.12 — MIT
+- npm: @types/react-dom 19.1.9 — MIT
+- npm: @vitejs/plugin-react 5.0.3 — MIT
+- npm: @vitest/expect 4.1.11 — MIT
+- npm: @vitest/mocker 4.1.11 — MIT
+- npm: @vitest/pretty-format 4.1.11 — MIT
+- npm: @vitest/runner 4.1.11 — MIT
+- npm: @vitest/snapshot 4.1.11 — MIT
+- npm: @vitest/spy 4.1.11 — MIT
+- npm: @vitest/utils 4.1.11 — MIT
+- npm: agent-base 7.1.4 — MIT
+- npm: ansi-regex 5.0.1 — MIT
+- npm: ansi-styles 5.2.0 — MIT
+- npm: aria-query 5.3.0 — Apache-2.0
+- npm: aria-query 5.3.2 — Apache-2.0
+- npm: assertion-error 2.0.1 — MIT
+- npm: baseline-browser-mapping 2.11.27 — Apache-2.0
+- npm: browserslist 4.29.3 — MIT
+- npm: caniuse-lite 1.0.30001814 — CC-BY-4.0
+- npm: chai 6.3.0 — MIT
+- npm: convert-source-map 2.0.0 — MIT
+- npm: css.escape 1.5.1 — MIT
+- npm: cssstyle 4.6.0 — MIT
+- npm: csstype 3.2.3 — MIT
+- npm: data-urls 5.0.0 — MIT
+- npm: debug 4.4.3 — MIT
+- npm: decimal.js 10.6.0 — MIT
+- npm: dequal 2.0.3 — MIT
+- npm: dom-accessibility-api 0.5.16 — MIT
+- npm: dom-accessibility-api 0.6.3 — MIT
+- npm: electron-to-chromium 1.5.447 — ISC
+- npm: entities 6.0.1 — BSD-2-Clause
+- npm: es-module-lexer 2.3.2 — MIT
+- npm: esbuild 0.28.2 — MIT
+- npm: escalade 3.2.0 — MIT
+- npm: estree-walker 3.0.3 — MIT
+- npm: expect-type 1.4.0 — Apache-2.0
+- npm: fdir 6.5.0 — MIT
+- npm: gensync 1.0.0-beta.2 — MIT
+- npm: html-encoding-sniffer 4.0.0 — MIT
+- npm: http-proxy-agent 7.0.2 — MIT
+- npm: https-proxy-agent 7.0.6 — MIT
+- npm: iconv-lite 0.6.3 — MIT
+- npm: indent-string 4.0.0 — MIT
+- npm: is-potential-custom-element-name 1.0.1 — MIT
+- npm: js-tokens 4.0.0 — MIT
+- npm: jsdom 26.1.0 — MIT
+- npm: jsesc 3.1.0 — MIT
+- npm: json5 2.2.3 — MIT
+- npm: lru-cache 10.4.3 — ISC
+- npm: lru-cache 5.1.1 — ISC
+- npm: lz-string 1.5.0 — MIT
+- npm: magic-string 0.30.21 — MIT
+- npm: min-indent 1.0.1 — MIT
+- npm: ms 2.1.3 — MIT
+- npm: nanoid 3.3.20 — MIT
+- npm: node-releases 2.0.57 — MIT
+- npm: nwsapi 2.2.28 — MIT
+- npm: obug 2.2.1 — MIT
+- npm: parse5 7.3.0 — MIT
+- npm: pathe 2.0.3 — MIT
+- npm: picocolors 1.1.1 — ISC
+- npm: picomatch 4.0.7 — MIT
+- npm: postcss 8.5.29 — MIT
+- npm: pretty-format 27.5.1 — MIT
+- npm: punycode 2.3.1 — MIT
+- npm: react 19.1.1 — MIT
+- npm: react-dom 19.1.1 — MIT
+- npm: react-is 17.0.2 — MIT
+- npm: react-refresh 0.17.0 — MIT
+- npm: redent 3.0.0 — MIT
+- npm: rollup 4.64.0 — MIT
+- npm: rrweb-cssom 0.8.0 — MIT
+- npm: safer-buffer 2.1.2 — MIT
+- npm: saxes 6.0.0 — ISC
+- npm: scheduler 0.26.0 — MIT
+- npm: semver 6.3.1 — ISC
+- npm: siginfo 2.0.0 — ISC
+- npm: source-map-js 1.2.2 — BSD-3-Clause
+- npm: stackback 0.0.2 — MIT
+- npm: std-env 4.3.0 — MIT
+- npm: strip-indent 3.0.0 — MIT
+- npm: symbol-tree 3.2.4 — MIT
+- npm: tinybench 2.9.0 — MIT
+- npm: tinyexec 1.3.1 — MIT
+- npm: tinyglobby 0.2.17 — MIT
+- npm: tinyrainbow 3.2.0 — MIT
+- npm: tldts 6.1.86 — MIT
+- npm: tldts-core 6.1.86 — MIT
+- npm: tough-cookie 5.1.2 — BSD-3-Clause
+- npm: tr46 5.1.1 — MIT
+- npm: typescript 5.9.2 — Apache-2.0
+- npm: undici-types 6.21.0 — MIT
+- npm: update-browserslist-db 1.3.3 — MIT
+- npm: vite 7.3.7 — MIT
+- npm: vitest 4.1.11 — MIT
+- npm: w3c-xmlserializer 5.0.0 — MIT
+- npm: webidl-conversions 7.0.0 — BSD-2-Clause
+- npm: whatwg-encoding 3.1.1 — MIT
+- npm: whatwg-mimetype 4.0.0 — MIT
+- npm: whatwg-url 14.2.0 — MIT
+- npm: why-is-node-running 2.3.0 — MIT
+- npm: ws 8.22.0 — MIT
+- npm: xml-name-validator 5.0.0 — Apache-2.0
+- npm: xmlchars 2.2.0 — MIT
+- npm: yallist 3.1.1 — ISC

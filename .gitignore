@@ -179,3 +179,18 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Local search build artifacts and private indexes
+node_modules/
+.old-node-modules/
+*.tsbuildinfo
+resources/models/*.litertlm
+resources/models/*.download
+resources/ffmpeg/bin/
+resources/inference/
+resources/native/*.dll
+tools/vendor/
+artifacts/
+desktop/src-tauri/gen/schemas/
+*.sqlite*
+*.usearch
